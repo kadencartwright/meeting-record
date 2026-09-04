@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kadencartwright/meeting-record/internal/audio"
+	"github.com/kadencartwright/meeting-record/internal/importer"
 	"github.com/kadencartwright/meeting-record/internal/meeting"
 	"github.com/kadencartwright/meeting-record/internal/processing"
 	"github.com/kadencartwright/meeting-record/internal/supervisor"
@@ -37,6 +38,10 @@ Usage:
   meeting-record play <session> [meeting|local|remote]
   meeting-record mix <session>
   meeting-record upload [--destination ID|--parent-page ID] [--title TITLE] <session> [--json]
+  meeting-record recorder list [--json]
+  meeting-record recorder play <recording>
+  meeting-record recorder notion <recording>
+  meeting-record recorder upload [--destination ID|--parent-page ID] [--title TITLE] <recording> [--json]
   meeting-record delete <session>
 `
 
@@ -104,6 +109,8 @@ func (app application) run(args []string) error {
 		return app.mix(args[1:])
 	case "upload":
 		return app.upload(args[1:])
+	case "recorder":
+		return app.recorder(args[1:])
 	case "delete":
 		return app.delete(args[1:])
 	case "_supervise":
@@ -754,6 +761,162 @@ func (app application) delete(args []string) error {
 	}
 	fmt.Fprintln(app.out, "Deleted", args[0])
 	return nil
+}
+
+func (app application) recorder(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: meeting-record recorder <list|play|notion|upload>")
+	}
+	switch args[0] {
+	case "list":
+		return app.recorderList(args[1:])
+	case "play":
+		return app.recorderPlay(args[1:])
+	case "notion":
+		return app.recorderNotion(args[1:])
+	case "upload":
+		return app.recorderUpload(args[1:])
+	default:
+		return fmt.Errorf("unknown recorder command %q", args[0])
+	}
+}
+
+func (app application) recorderList(args []string) error {
+	jsonOutput, rest, err := parseJSONFlag("recorder list", args)
+	if err != nil || len(rest) != 0 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("recorder list accepts only --json")
+	}
+	inventory, _, err := app.externalInventory(true)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		return writeJSON(app.out, inventory)
+	}
+	for _, recorder := range inventory.Recorders {
+		if !recorder.Connected {
+			fmt.Fprintf(app.out, "%s  disconnected\n", recorder.Label)
+			continue
+		}
+		for _, file := range recorder.Files {
+			fmt.Fprintf(app.out, "%s  %-8s  %s\n", file.ID, formatDuration(time.Duration(file.DurationSeconds)*time.Second), file.RecordedAt.Format(time.RFC3339))
+		}
+	}
+	return nil
+}
+
+func (app application) recorderPlay(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: meeting-record recorder play <recording>")
+	}
+	file, _, err := app.externalFile(args[0])
+	if err != nil {
+		return err
+	}
+	return launch("xdg-open", file.Path)
+}
+
+func (app application) recorderNotion(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: meeting-record recorder notion <recording>")
+	}
+	registry, err := importer.LoadRegistry(app.storage)
+	if err != nil {
+		return err
+	}
+	upload, found := registry.LookupID(args[0])
+	if !found {
+		return fmt.Errorf("external recording %q has not been uploaded to Notion", args[0])
+	}
+	url, err := notionExportURL(upload.Notion)
+	if err != nil {
+		return err
+	}
+	return launch("xdg-open", url)
+}
+
+func (app application) recorderUpload(args []string) error {
+	options, err := parseUploadOptions(args)
+	if err != nil {
+		return errors.New(strings.Replace(err.Error(), "meeting-record upload", "meeting-record recorder upload", 1))
+	}
+	file, registry, err := app.externalFile(options.SessionID)
+	if err != nil {
+		return err
+	}
+	if existing, found := registry.Lookup(file); found {
+		return fmt.Errorf("external recording is already uploaded to Notion as page %s", existing.Notion.PageID)
+	}
+	destination, err := resolveDestination(options)
+	if err != nil {
+		return err
+	}
+	temporaryDirectory, err := os.MkdirTemp("", "meeting-record-import-*")
+	if err != nil {
+		return fmt.Errorf("create external recording workspace: %w", err)
+	}
+	defer os.RemoveAll(temporaryDirectory)
+	converted := filepath.Join(temporaryDirectory, "recording.m4a")
+	convertContext, cancelConvert := context.WithTimeout(context.Background(), 2*time.Hour)
+	err = processing.Transcode(convertContext, processing.ExecRunner{}, file.Path, converted)
+	cancelConvert()
+	if err != nil {
+		return err
+	}
+	title := strings.TrimSpace(options.Title)
+	if title == "" {
+		title = "Voice memo " + file.RecordedAt.Format("Jan 2, 2006 3:04 PM")
+	}
+	uploadContext, cancelUpload := context.WithTimeout(context.Background(), 2*time.Hour)
+	notion, err := processing.UploadAudioToNotion(uploadContext, processing.ExecRunner{}, converted, strings.TrimSuffix(file.Name, filepath.Ext(file.Name))+".m4a", title, processing.NotionOptions{
+		ParentPageID: destination.ParentPageID, DestinationID: destination.ID,
+		DestinationName: destination.Label, Title: title, Language: "auto", KickoffSummary: true,
+	})
+	cancelUpload()
+	if err != nil {
+		return err
+	}
+	registry.Put(file, notion)
+	if err := registry.Save(app.storage); err != nil {
+		return err
+	}
+	if options.JSON {
+		return writeJSON(app.out, notion)
+	}
+	fmt.Fprintf(app.out, "Notion voice memo page created\n\n  destination %s\n  page        %s\n", destination.Label, notion.PageID)
+	return nil
+}
+
+func (app application) externalInventory(mount bool) (importer.Inventory, importer.Registry, error) {
+	config, err := meeting.LoadConfig()
+	if err != nil {
+		return importer.Inventory{}, importer.Registry{}, err
+	}
+	registry, err := importer.LoadRegistry(app.storage)
+	if err != nil {
+		return importer.Inventory{}, importer.Registry{}, err
+	}
+	inventory, err := importer.Discover(context.Background(), importer.ExecRunner{}, config.ExternalRecorders, mount)
+	if err != nil {
+		return importer.Inventory{}, importer.Registry{}, err
+	}
+	importer.Decorate(&inventory, registry)
+	return inventory, registry, nil
+}
+
+func (app application) externalFile(id string) (importer.File, importer.Registry, error) {
+	inventory, registry, err := app.externalInventory(true)
+	if err != nil {
+		return importer.File{}, importer.Registry{}, err
+	}
+	file, found := importer.Find(inventory, id)
+	if !found {
+		return importer.File{}, registry, fmt.Errorf("external recording %q is unavailable; connect the recorder and refresh", id)
+	}
+	return file, registry, nil
 }
 
 func (app application) inspect() (supervisor.State, bool, error) {

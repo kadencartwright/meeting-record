@@ -52,6 +52,10 @@ meeting-record play SESSION remote
 meeting-record mix SESSION
 meeting-record destinations --json
 meeting-record upload SESSION --destination DESTINATION
+meeting-record recorder list --json
+meeting-record recorder play RECORDER/FILE
+meeting-record recorder upload RECORDER/FILE --destination DESTINATION
+meeting-record recorder notion RECORDER/FILE
 meeting-record delete SESSION
 ```
 
@@ -196,6 +200,34 @@ summary generation. The current Notion public API and `ntn` endpoint catalog do
 not provide a Notion Calendar API or accept calendar-event data when creating a
 meeting note, so this project deliberately performs no Google/Gmail calendar
 integration.
+
+## USB voice recorders
+
+Mass-storage recorders can be declared by filesystem UUID and relative audio
+directory in `config.json`:
+
+```json
+{
+  "externalRecorders": [
+    {
+      "id": "voice-memos",
+      "label": "Voice recorder",
+      "filesystemUuid": "5AA7-563B",
+      "recordingsPath": "RECORD"
+    }
+  ]
+}
+```
+
+`recorder list` locates the device through `/dev/disk/by-uuid`, mounts it
+read-only through UDisks when necessary, scans supported audio files, and uses
+`ffprobe` for codec and duration metadata. `recorder play` opens the original
+file. `recorder upload` converts the selected file to a temporary 48 kHz M4A,
+uploads it through `ntn`, creates a titled child page at the chosen destination,
+and records the resulting page URL in
+`${XDG_DATA_HOME:-$HOME/.local/share}/meeting-record/external-uploads.json`.
+The source device is never modified, and a fingerprint prevents the same file
+from being uploaded twice while allowing a replaced file with the same name.
 
 ## Manual integration test
 

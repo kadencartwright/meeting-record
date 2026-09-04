@@ -13,7 +13,7 @@ func TestLoadConfigDestinations(t *testing.T) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	data := []byte(`{"notion":{"destinations":[{"id":"team","label":"Team meetings","parentPageId":"team-page"},{"id":"personal","label":"Personal notes","parentPageId":"personal-page"}]}}`)
+	data := []byte(`{"notion":{"destinations":[{"id":"team","label":"Team meetings","parentPageId":"team-page"},{"id":"personal","label":"Personal notes","parentPageId":"personal-page"}]},"externalRecorders":[{"id":"voice-memos","label":"Voice recorder","filesystemUuid":"5AA7-563B","recordingsPath":"RECORD"}]}`)
 	if err := os.WriteFile(filepath.Join(directory, "config.json"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -23,6 +23,9 @@ func TestLoadConfigDestinations(t *testing.T) {
 	}
 	if len(config.Notion.Destinations) != 2 || config.Notion.Destinations[1].ID != "personal" {
 		t.Fatalf("unexpected destinations: %#v", config.Notion.Destinations)
+	}
+	if len(config.ExternalRecorders) != 1 || config.ExternalRecorders[0].RecordingsPath != "RECORD" {
+		t.Fatalf("unexpected external recorders: %#v", config.ExternalRecorders)
 	}
 }
 

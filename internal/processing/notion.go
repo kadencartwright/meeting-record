@@ -49,13 +49,24 @@ func UploadToNotion(ctx context.Context, runner Runner, directory string, metada
 	if err != nil {
 		return meeting.NotionExport{}, err
 	}
+	title := strings.TrimSpace(options.Title)
+	if title == "" {
+		title = "Meeting " + metadata.StartedAt.Format("Jan 2, 2006 3:04 PM")
+	}
+	return UploadAudioToNotion(ctx, runner, audioPath, metadata.ID+filepath.Ext(metadata.Merged.File), title, options)
+}
+
+func UploadAudioToNotion(ctx context.Context, runner Runner, audioPath, uploadFilename, defaultTitle string, options NotionOptions) (meeting.NotionExport, error) {
+	if strings.TrimSpace(options.ParentPageID) == "" {
+		return meeting.NotionExport{}, fmt.Errorf("Notion parent page is not configured")
+	}
 	audioFile, err := os.Open(audioPath)
 	if err != nil {
 		return meeting.NotionExport{}, fmt.Errorf("open merged meeting audio: %w", err)
 	}
 	uploadOutput, err := runner.Run(ctx, "ntn", []string{
 		"files", "create", "--json",
-		"--filename", metadata.ID + filepath.Ext(metadata.Merged.File),
+		"--filename", uploadFilename,
 		"--content-type", "audio/mp4",
 	}, audioFile)
 	closeErr := audioFile.Close()
@@ -75,7 +86,7 @@ func UploadToNotion(ctx context.Context, runner Runner, directory string, metada
 
 	title := strings.TrimSpace(options.Title)
 	if title == "" {
-		title = "Meeting " + metadata.StartedAt.Format("Jan 2, 2006 3:04 PM")
+		title = defaultTitle
 	}
 	language := strings.TrimSpace(options.Language)
 	if language == "" {

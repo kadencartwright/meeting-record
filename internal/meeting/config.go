@@ -15,10 +15,18 @@ type Destination struct {
 	ParentPageID string `json:"parentPageId"`
 }
 
+type ExternalRecorder struct {
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	FilesystemUUID string `json:"filesystemUuid"`
+	RecordingsPath string `json:"recordingsPath"`
+}
+
 type Config struct {
 	Notion struct {
 		Destinations []Destination `json:"destinations"`
 	} `json:"notion"`
+	ExternalRecorders []ExternalRecorder `json:"externalRecorders"`
 }
 
 func DefaultConfigPath() (string, error) {
@@ -64,6 +72,30 @@ func LoadConfig() (Config, error) {
 		seen[destination.ID] = true
 		if destination.Label == "" {
 			destination.Label = destination.ID
+		}
+	}
+	seen = make(map[string]bool)
+	for index := range config.ExternalRecorders {
+		recorder := &config.ExternalRecorders[index]
+		recorder.ID = strings.TrimSpace(recorder.ID)
+		recorder.Label = strings.TrimSpace(recorder.Label)
+		recorder.FilesystemUUID = strings.TrimSpace(recorder.FilesystemUUID)
+		recorder.RecordingsPath = filepath.Clean(strings.TrimSpace(recorder.RecordingsPath))
+		if recorder.ID == "" || strings.ContainsAny(recorder.ID, `/\\`) || recorder.FilesystemUUID == "" {
+			return Config{}, fmt.Errorf("external recorder %d requires a safe id and filesystemUuid", index+1)
+		}
+		if seen[recorder.ID] {
+			return Config{}, fmt.Errorf("duplicate external recorder id %q", recorder.ID)
+		}
+		seen[recorder.ID] = true
+		if recorder.Label == "" {
+			recorder.Label = recorder.ID
+		}
+		if recorder.RecordingsPath == "." {
+			recorder.RecordingsPath = ""
+		}
+		if filepath.IsAbs(recorder.RecordingsPath) || recorder.RecordingsPath == ".." || strings.HasPrefix(recorder.RecordingsPath, ".."+string(filepath.Separator)) {
+			return Config{}, fmt.Errorf("external recorder %q has an unsafe recordingsPath", recorder.ID)
 		}
 	}
 	return config, nil

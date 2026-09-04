@@ -45,7 +45,7 @@
           };
           meetingRecord = pkgs.buildGoModule {
             pname = "meeting-record";
-            version = "0.4.0";
+            version = "0.5.0";
             src = self;
             vendorHash = null;
 
@@ -56,6 +56,8 @@
                   pkgs.ffmpeg-headless
                   pkgs.pipewire
                   pkgs.systemd
+                  pkgs.udisks2
+                  pkgs.util-linux
                   pkgs.wireplumber
                   pkgs.xdg-utils
                   notionCli
