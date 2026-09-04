@@ -7,7 +7,7 @@ import (
 	"github.com/kadencartwright/meeting-record/internal/audio"
 )
 
-const MetadataVersion = 2
+const MetadataVersion = 3
 
 type Track struct {
 	File        string `json:"file"`
@@ -22,10 +22,12 @@ type AudioFile struct {
 }
 
 type NotionExport struct {
-	FileUploadID string    `json:"fileUploadId"`
-	BlockID      string    `json:"blockId"`
-	UploadedAt   time.Time `json:"uploadedAt"`
-	Status       string    `json:"status"`
+	FileUploadID    string    `json:"fileUploadId"`
+	BlockID         string    `json:"blockId"`
+	UploadedAt      time.Time `json:"uploadedAt"`
+	Status          string    `json:"status"`
+	DestinationID   string    `json:"destinationId,omitempty"`
+	DestinationName string    `json:"destinationName,omitempty"`
 }
 
 type Metadata struct {

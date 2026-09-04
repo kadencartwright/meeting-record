@@ -13,10 +13,12 @@ import (
 )
 
 type NotionOptions struct {
-	ParentPageID   string
-	Title          string
-	Language       string
-	KickoffSummary bool
+	ParentPageID    string
+	DestinationID   string
+	DestinationName string
+	Title           string
+	Language        string
+	KickoffSummary  bool
 }
 
 type fileUploadResponse struct {
@@ -106,9 +108,11 @@ func UploadToNotion(ctx context.Context, runner Runner, directory string, metada
 		return meeting.NotionExport{}, fmt.Errorf("Notion meeting note response contained no block id")
 	}
 	return meeting.NotionExport{
-		FileUploadID: upload.ID,
-		BlockID:      note.ID,
-		UploadedAt:   time.Now(),
-		Status:       "processing",
+		FileUploadID:    upload.ID,
+		BlockID:         note.ID,
+		UploadedAt:      time.Now(),
+		Status:          "processing",
+		DestinationID:   options.DestinationID,
+		DestinationName: options.DestinationName,
 	}, nil
 }

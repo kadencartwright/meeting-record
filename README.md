@@ -47,7 +47,8 @@ meeting-record play SESSION meeting
 meeting-record play SESSION local
 meeting-record play SESSION remote
 meeting-record mix SESSION
-meeting-record upload SESSION
+meeting-record destinations --json
+meeting-record upload SESSION --destination DESTINATION
 meeting-record delete SESSION
 ```
 
@@ -140,18 +141,39 @@ Authenticate once with:
 ntn login
 ```
 
-Choose the Notion page that will contain new meeting-note blocks and expose its
-ID to the CLI and Quickshell service:
+Configure one or more named parent pages in
+`${XDG_CONFIG_HOME:-$HOME/.config}/meeting-record/config.json`:
 
-```console
-export MEETING_RECORD_NOTION_PARENT_PAGE_ID=0123456789abcdef0123456789abcdef
-meeting-record upload SESSION
+```json
+{
+  "notion": {
+    "destinations": [
+      {
+        "id": "team",
+        "label": "Team meetings",
+        "parentPageId": "0123456789abcdef0123456789abcdef"
+      },
+      {
+        "id": "personal",
+        "label": "Personal notes",
+        "parentPageId": "fedcba9876543210fedcba9876543210"
+      }
+    ]
+  }
+}
 ```
 
-Alternatively, pass `--parent-page ID` for a single terminal upload. The
-integration requests automatic language detection and Notion's normal summary
-generation. The current Notion public API and `ntn` endpoint catalog do not
-provide a Notion Calendar API or accept calendar-event data when creating a
+List the public destination IDs and labels with `meeting-record destinations`,
+then upload with `meeting-record upload SESSION --destination team`. When only
+one destination exists it is selected automatically. `--parent-page ID` remains
+available for a one-off terminal upload, and the legacy
+`MEETING_RECORD_NOTION_PARENT_PAGE_ID` environment variable remains supported.
+The selected destination ID and label are saved in `meeting.json`; parent page
+IDs are not exposed in the destination-list JSON consumed by desktop UIs.
+
+The integration requests automatic language detection and Notion's normal
+summary generation. The current Notion public API and `ntn` endpoint catalog do
+not provide a Notion Calendar API or accept calendar-event data when creating a
 meeting note, so this project deliberately performs no Google/Gmail calendar
 integration.
 

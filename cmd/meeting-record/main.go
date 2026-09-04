@@ -29,10 +29,11 @@ Usage:
   meeting-record status [--json]
   meeting-record list [--json]
   meeting-record show <session> [--json]
+  meeting-record destinations [--json]
   meeting-record open <session>
   meeting-record play <session> [meeting|local|remote]
   meeting-record mix <session>
-  meeting-record upload [--parent-page ID] [--title TITLE] <session> [--json]
+  meeting-record upload [--destination ID|--parent-page ID] [--title TITLE] <session> [--json]
   meeting-record delete <session>
 `
 
@@ -84,6 +85,8 @@ func (app application) run(args []string) error {
 		return app.list(args[1:])
 	case "show":
 		return app.show(args[1:])
+	case "destinations":
+		return app.destinations(args[1:])
 	case "open":
 		return app.open(args[1:])
 	case "play":
@@ -481,10 +484,52 @@ func (app application) mix(args []string) error {
 }
 
 type uploadOptions struct {
-	SessionID  string
-	ParentPage string
-	Title      string
-	JSON       bool
+	SessionID   string
+	Destination string
+	ParentPage  string
+	Title       string
+	JSON        bool
+}
+
+type destinationsResult struct {
+	Destinations []destinationSummary `json:"destinations"`
+}
+
+type destinationSummary struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
+func (app application) destinations(args []string) error {
+	jsonOutput, rest, err := parseJSONFlag("destinations", args)
+	if err != nil || len(rest) != 0 {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("destinations accepts only --json")
+	}
+	config, err := meeting.LoadConfig()
+	if err != nil {
+		return err
+	}
+	result := destinationsResult{Destinations: []destinationSummary{}}
+	for _, destination := range config.Notion.Destinations {
+		result.Destinations = append(result.Destinations, destinationSummary{ID: destination.ID, Label: destination.Label})
+	}
+	if len(result.Destinations) == 0 && strings.TrimSpace(os.Getenv("MEETING_RECORD_NOTION_PARENT_PAGE_ID")) != "" {
+		result.Destinations = append(result.Destinations, destinationSummary{ID: "default", Label: "Notion"})
+	}
+	if jsonOutput {
+		return writeJSON(app.out, result)
+	}
+	if len(result.Destinations) == 0 {
+		fmt.Fprintln(app.out, "No Notion destinations configured")
+		return nil
+	}
+	for _, destination := range result.Destinations {
+		fmt.Fprintf(app.out, "%s  %s\n", destination.ID, destination.Label)
+	}
+	return nil
 }
 
 func (app application) upload(args []string) error {
@@ -499,6 +544,10 @@ func (app application) upload(args []string) error {
 	if metadata.Notion != nil && metadata.Notion.BlockID != "" {
 		return fmt.Errorf("session is already uploaded to Notion as block %s", metadata.Notion.BlockID)
 	}
+	destination, err := resolveDestination(options)
+	if err != nil {
+		return err
+	}
 	if metadata.Merged == nil || metadata.Merged.File == "" {
 		merged, mergeErr := mixSession(directory, metadata)
 		if mergeErr != nil {
@@ -512,14 +561,11 @@ func (app application) upload(args []string) error {
 			return err
 		}
 	}
-	parentPage := strings.TrimSpace(options.ParentPage)
-	if parentPage == "" {
-		parentPage = strings.TrimSpace(os.Getenv("MEETING_RECORD_NOTION_PARENT_PAGE_ID"))
-	}
 	uploadContext, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 	notion, err := processing.UploadToNotion(uploadContext, processing.ExecRunner{}, directory, metadata, processing.NotionOptions{
-		ParentPageID: parentPage, Title: options.Title, Language: "auto", KickoffSummary: true,
+		ParentPageID: destination.ParentPageID, DestinationID: destination.ID,
+		DestinationName: destination.Label, Title: options.Title, Language: "auto", KickoffSummary: true,
 	})
 	if err != nil {
 		return err
@@ -531,7 +577,7 @@ func (app application) upload(args []string) error {
 	if options.JSON {
 		return writeJSON(app.out, notion)
 	}
-	fmt.Fprintf(app.out, "Notion meeting note created\n\n  block       %s\n  upload      %s\n", notion.BlockID, notion.FileUploadID)
+	fmt.Fprintf(app.out, "Notion meeting note created\n\n  destination %s\n  block       %s\n  upload      %s\n", destination.Label, notion.BlockID, notion.FileUploadID)
 	return nil
 }
 
@@ -558,12 +604,14 @@ func parseUploadOptions(args []string) (uploadOptions, error) {
 		switch args[index] {
 		case "--json":
 			options.JSON = true
-		case "--parent-page", "--title":
+		case "--destination", "--parent-page", "--title":
 			if index+1 >= len(args) {
 				return options, fmt.Errorf("upload: %s requires a value", args[index])
 			}
 			index++
-			if args[index-1] == "--parent-page" {
+			if args[index-1] == "--destination" {
+				options.Destination = args[index]
+			} else if args[index-1] == "--parent-page" {
 				options.ParentPage = args[index]
 			} else {
 				options.Title = args[index]
@@ -573,15 +621,45 @@ func parseUploadOptions(args []string) (uploadOptions, error) {
 				return options, fmt.Errorf("upload: unknown option %s", args[index])
 			}
 			if options.SessionID != "" {
-				return options, fmt.Errorf("usage: meeting-record upload [--parent-page ID] [--title TITLE] <session> [--json]")
+				return options, fmt.Errorf("usage: meeting-record upload [--destination ID|--parent-page ID] [--title TITLE] <session> [--json]")
 			}
 			options.SessionID = args[index]
 		}
 	}
 	if options.SessionID == "" {
-		return options, fmt.Errorf("usage: meeting-record upload [--parent-page ID] [--title TITLE] <session> [--json]")
+		return options, fmt.Errorf("usage: meeting-record upload [--destination ID|--parent-page ID] [--title TITLE] <session> [--json]")
 	}
 	return options, nil
+}
+
+func resolveDestination(options uploadOptions) (meeting.Destination, error) {
+	if parent := strings.TrimSpace(options.ParentPage); parent != "" {
+		if options.Destination != "" {
+			return meeting.Destination{}, fmt.Errorf("upload: --destination and --parent-page are mutually exclusive")
+		}
+		return meeting.Destination{ID: "custom", Label: "Custom page", ParentPageID: parent}, nil
+	}
+	config, err := meeting.LoadConfig()
+	if err != nil {
+		return meeting.Destination{}, err
+	}
+	requested := strings.TrimSpace(options.Destination)
+	for _, destination := range config.Notion.Destinations {
+		if destination.ID == requested || (requested == "" && len(config.Notion.Destinations) == 1) {
+			return destination, nil
+		}
+	}
+	legacyParent := strings.TrimSpace(os.Getenv("MEETING_RECORD_NOTION_PARENT_PAGE_ID"))
+	if legacyParent != "" && (requested == "" || requested == "default") {
+		return meeting.Destination{ID: "default", Label: "Notion", ParentPageID: legacyParent}, nil
+	}
+	if requested != "" {
+		return meeting.Destination{}, fmt.Errorf("unknown Notion destination %q", requested)
+	}
+	if len(config.Notion.Destinations) > 1 {
+		return meeting.Destination{}, fmt.Errorf("multiple Notion destinations are configured; pass --destination ID")
+	}
+	return meeting.Destination{}, fmt.Errorf("no Notion destinations are configured")
 }
 
 func (app application) delete(args []string) error {

@@ -46,13 +46,16 @@ func TestUploadToNotionUsesCLIAndCreatesMeetingNote(t *testing.T) {
 	}
 	runner := &notionRunner{}
 	result, err := UploadToNotion(context.Background(), runner, directory, metadata, NotionOptions{
-		ParentPageID: "parent-id", KickoffSummary: true,
+		ParentPageID: "parent-id", DestinationID: "team", DestinationName: "Team meetings", KickoffSummary: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.FileUploadID != "upload-id" || result.BlockID != "block-id" || result.Status != "processing" {
 		t.Fatalf("unexpected Notion result: %#v", result)
+	}
+	if result.DestinationID != "team" || result.DestinationName != "Team meetings" {
+		t.Fatalf("destination was not retained: %#v", result)
 	}
 	if len(runner.calls) != 2 || runner.calls[0].name != "ntn" || runner.calls[1].name != "ntn" {
 		t.Fatalf("unexpected calls: %#v", runner.calls)
