@@ -31,7 +31,7 @@ func (runner *notionRunner) Run(_ context.Context, name string, args []string, s
 	if len(runner.calls) == 1 {
 		return []byte(`{"id":"upload-id","status":"uploaded"}`), nil
 	}
-	return []byte(`{"object":"block","id":"block-id"}`), nil
+	return []byte(`{"object":"block","id":"3d12d5f2-8d7d-803f-a8ec-e1c7b133b4f5"}`), nil
 }
 
 func TestUploadToNotionUsesCLIAndCreatesMeetingNote(t *testing.T) {
@@ -46,16 +46,19 @@ func TestUploadToNotionUsesCLIAndCreatesMeetingNote(t *testing.T) {
 	}
 	runner := &notionRunner{}
 	result, err := UploadToNotion(context.Background(), runner, directory, metadata, NotionOptions{
-		ParentPageID: "parent-id", DestinationID: "team", DestinationName: "Team meetings", KickoffSummary: true,
+		ParentPageID: "3d12d5f2-8d7d-8067-ad48-c686bec6fb0a", DestinationID: "team", DestinationName: "Team meetings", KickoffSummary: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.FileUploadID != "upload-id" || result.BlockID != "block-id" || result.Status != "processing" {
+	if result.FileUploadID != "upload-id" || result.BlockID != "3d12d5f2-8d7d-803f-a8ec-e1c7b133b4f5" || result.Status != "processing" {
 		t.Fatalf("unexpected Notion result: %#v", result)
 	}
 	if result.DestinationID != "team" || result.DestinationName != "Team meetings" {
 		t.Fatalf("destination was not retained: %#v", result)
+	}
+	if result.URL != "https://app.notion.com/p/3d12d5f28d7d8067ad48c686bec6fb0a#3d12d5f28d7d803fa8ece1c7b133b4f5" {
+		t.Fatalf("unexpected Notion URL: %q", result.URL)
 	}
 	if len(runner.calls) != 2 || runner.calls[0].name != "ntn" || runner.calls[1].name != "ntn" {
 		t.Fatalf("unexpected calls: %#v", runner.calls)
@@ -78,7 +81,7 @@ func TestUploadToNotionUsesCLIAndCreatesMeetingNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	parent := body["parent"].(map[string]any)
-	if parent["page_id"] != "parent-id" {
+	if parent["page_id"] != "3d12d5f2-8d7d-8067-ad48-c686bec6fb0a" {
 		t.Fatalf("unexpected meeting note parent: %#v", body)
 	}
 }

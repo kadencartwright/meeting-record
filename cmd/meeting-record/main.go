@@ -31,6 +31,7 @@ Usage:
   meeting-record show <session> [--json]
   meeting-record destinations [--json]
   meeting-record open <session>
+  meeting-record notion <session>
   meeting-record play <session> [meeting|local|remote]
   meeting-record mix <session>
   meeting-record upload [--destination ID|--parent-page ID] [--title TITLE] <session> [--json]
@@ -89,6 +90,8 @@ func (app application) run(args []string) error {
 		return app.destinations(args[1:])
 	case "open":
 		return app.open(args[1:])
+	case "notion":
+		return app.notion(args[1:])
 	case "play":
 		return app.play(args[1:])
 	case "mix":
@@ -424,6 +427,35 @@ func (app application) open(args []string) error {
 		return err
 	}
 	return launch("xdg-open", directory)
+}
+
+func (app application) notion(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: meeting-record notion <session>")
+	}
+	metadata, _, err := app.storage.Load(args[0])
+	if err != nil {
+		return err
+	}
+	if metadata.Notion == nil || metadata.Notion.BlockID == "" {
+		return fmt.Errorf("session %s has not been uploaded to Notion", args[0])
+	}
+	notionURL, err := notionExportURL(*metadata.Notion)
+	if err != nil {
+		return err
+	}
+	return launch("xdg-open", notionURL)
+}
+
+func notionExportURL(notion meeting.NotionExport) (string, error) {
+	if notionURL := strings.TrimSpace(notion.URL); notionURL != "" {
+		return notionURL, nil
+	}
+	destination, err := resolveDestination(uploadOptions{Destination: notion.DestinationID})
+	if err != nil {
+		return "", fmt.Errorf("resolve the session's Notion destination: %w", err)
+	}
+	return meeting.NotionBlockURL(destination.ParentPageID, notion.BlockID)
 }
 
 func (app application) play(args []string) error {

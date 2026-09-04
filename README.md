@@ -43,6 +43,7 @@ meeting-record status --json
 meeting-record list --json
 meeting-record show SESSION --json
 meeting-record open SESSION
+meeting-record notion SESSION
 meeting-record play SESSION meeting
 meeting-record play SESSION local
 meeting-record play SESSION remote
@@ -170,6 +171,9 @@ available for a one-off terminal upload, and the legacy
 `MEETING_RECORD_NOTION_PARENT_PAGE_ID` environment variable remains supported.
 The selected destination ID and label are saved in `meeting.json`; parent page
 IDs are not exposed in the destination-list JSON consumed by desktop UIs.
+Successful uploads also save a direct block URL. `meeting-record notion SESSION`
+opens that meeting note, including older destination-aware sessions whose
+metadata predates the saved URL.
 
 The integration requests automatic language detection and Notion's normal
 summary generation. The current Notion public API and `ntn` endpoint catalog do

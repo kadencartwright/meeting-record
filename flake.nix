@@ -45,7 +45,7 @@
           };
           meetingRecord = pkgs.buildGoModule {
             pname = "meeting-record";
-            version = "0.3.0";
+            version = "0.3.1";
             src = self;
             vendorHash = null;
 

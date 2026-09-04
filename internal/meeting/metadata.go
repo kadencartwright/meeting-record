@@ -7,7 +7,7 @@ import (
 	"github.com/kadencartwright/meeting-record/internal/audio"
 )
 
-const MetadataVersion = 3
+const MetadataVersion = 4
 
 type Track struct {
 	File        string `json:"file"`
@@ -28,6 +28,7 @@ type NotionExport struct {
 	Status          string    `json:"status"`
 	DestinationID   string    `json:"destinationId,omitempty"`
 	DestinationName string    `json:"destinationName,omitempty"`
+	URL             string    `json:"url,omitempty"`
 }
 
 type Metadata struct {

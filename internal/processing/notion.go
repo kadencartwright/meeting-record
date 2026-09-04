@@ -107,6 +107,7 @@ func UploadToNotion(ctx context.Context, runner Runner, directory string, metada
 	if note.ID == "" {
 		return meeting.NotionExport{}, fmt.Errorf("Notion meeting note response contained no block id")
 	}
+	notionURL, _ := meeting.NotionBlockURL(options.ParentPageID, note.ID)
 	return meeting.NotionExport{
 		FileUploadID:    upload.ID,
 		BlockID:         note.ID,
@@ -114,5 +115,6 @@ func UploadToNotion(ctx context.Context, runner Runner, directory string, metada
 		Status:          "processing",
 		DestinationID:   options.DestinationID,
 		DestinationName: options.DestinationName,
+		URL:             notionURL,
 	}, nil
 }
