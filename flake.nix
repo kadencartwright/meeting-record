@@ -53,7 +53,7 @@
             postInstall = ''
               wrapProgram $out/bin/meeting-record \
                 --prefix PATH : ${pkgs.lib.makeBinPath [
-                  pkgs.ffmpeg
+                  pkgs.ffmpeg-headless
                   pkgs.pipewire
                   pkgs.systemd
                   pkgs.wireplumber
@@ -95,7 +95,7 @@
             packages = [
               pkgs.go
               pkgs.gopls
-              pkgs.ffmpeg
+              pkgs.ffmpeg-headless
               pkgs.pipewire
               pkgs.wireplumber
             ];
