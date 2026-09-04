@@ -7,7 +7,7 @@ import (
 	"github.com/kadencartwright/meeting-record/internal/audio"
 )
 
-const MetadataVersion = 4
+const MetadataVersion = 5
 
 type Track struct {
 	File        string `json:"file"`
@@ -23,6 +23,7 @@ type AudioFile struct {
 
 type NotionExport struct {
 	FileUploadID    string    `json:"fileUploadId"`
+	PageID          string    `json:"pageId,omitempty"`
 	BlockID         string    `json:"blockId"`
 	UploadedAt      time.Time `json:"uploadedAt"`
 	Status          string    `json:"status"`
@@ -32,19 +33,21 @@ type NotionExport struct {
 }
 
 type Metadata struct {
-	Version         int           `json:"version"`
-	ID              string        `json:"id"`
-	StartedAt       time.Time     `json:"startedAt"`
-	EndedAt         *time.Time    `json:"endedAt,omitempty"`
-	DurationSeconds int64         `json:"durationSeconds"`
-	SampleRate      int           `json:"sampleRate"`
-	Status          string        `json:"status"`
-	Failure         string        `json:"failure,omitempty"`
-	Local           Track         `json:"local"`
-	Remote          Track         `json:"remote"`
-	Merged          *AudioFile    `json:"merged,omitempty"`
-	MergeFailure    string        `json:"mergeFailure,omitempty"`
-	Notion          *NotionExport `json:"notion,omitempty"`
+	Version               int           `json:"version"`
+	ID                    string        `json:"id"`
+	StartedAt             time.Time     `json:"startedAt"`
+	EndedAt               *time.Time    `json:"endedAt,omitempty"`
+	DurationSeconds       int64         `json:"durationSeconds"`
+	WallDurationSeconds   int64         `json:"wallDurationSeconds,omitempty"`
+	PausedDurationSeconds float64       `json:"pausedDurationSeconds,omitempty"`
+	SampleRate            int           `json:"sampleRate"`
+	Status                string        `json:"status"`
+	Failure               string        `json:"failure,omitempty"`
+	Local                 Track         `json:"local"`
+	Remote                Track         `json:"remote"`
+	Merged                *AudioFile    `json:"merged,omitempty"`
+	MergeFailure          string        `json:"mergeFailure,omitempty"`
+	Notion                *NotionExport `json:"notion,omitempty"`
 }
 
 func NewMetadata(id string, startedAt time.Time, devices audio.Devices) Metadata {
@@ -66,8 +69,16 @@ func NewMetadata(id string, startedAt time.Time, devices audio.Devices) Metadata
 }
 
 func (m *Metadata) Finish(endedAt time.Time, failure string) {
+	m.FinishWithPaused(endedAt, 0, failure)
+}
+
+func (m *Metadata) FinishWithPaused(endedAt time.Time, paused time.Duration, failure string) {
 	m.EndedAt = &endedAt
-	m.DurationSeconds = max(0, int64(endedAt.Sub(m.StartedAt).Seconds()))
+	wall := max(0, endedAt.Sub(m.StartedAt))
+	paused = max(0, min(paused, wall))
+	m.WallDurationSeconds = int64(wall.Seconds())
+	m.PausedDurationSeconds = paused.Seconds()
+	m.DurationSeconds = max(0, int64((wall - paused).Seconds()))
 	if failure == "" {
 		m.Status = "complete"
 	} else {

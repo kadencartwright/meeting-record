@@ -81,3 +81,15 @@ func TestDeleteRejectsTraversal(t *testing.T) {
 		t.Fatal("expected traversal to be rejected")
 	}
 }
+
+func TestFinishExcludesPausedTime(t *testing.T) {
+	started := time.Date(2026, 9, 4, 9, 0, 0, 0, time.UTC)
+	metadata := Metadata{StartedAt: started}
+	metadata.FinishWithPaused(started.Add(10*time.Minute), 3*time.Minute+500*time.Millisecond, "")
+	if metadata.DurationSeconds != 419 || metadata.WallDurationSeconds != 600 {
+		t.Fatalf("unexpected durations: %#v", metadata)
+	}
+	if metadata.PausedDurationSeconds != 180.5 {
+		t.Fatalf("paused duration = %v, want 180.5", metadata.PausedDurationSeconds)
+	}
+}

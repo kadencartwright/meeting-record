@@ -55,3 +55,39 @@ func TestAcquirePreventsSecondSupervisor(t *testing.T) {
 		t.Fatalf("Acquire() error = %v, want ErrAlreadyRecording", err)
 	}
 }
+
+func TestPausedStateRoundTrip(t *testing.T) {
+	runtime := Runtime{Directory: t.TempDir()}
+	pausedAt := time.Date(2026, 9, 4, 10, 5, 0, 0, time.UTC)
+	want := State{
+		Recording: true,
+		Paused:    true,
+		Session: &SessionState{
+			ID: "session", StartedAt: pausedAt.Add(-5 * time.Minute), PausedAt: &pausedAt,
+			PausedDurationSeconds: 12.5,
+		},
+	}
+	if err := runtime.WriteState(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := runtime.ReadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Paused || got.Session == nil || got.Session.PausedAt == nil || got.Session.PausedDurationSeconds != 12.5 {
+		t.Fatalf("paused state did not round-trip: %#v", got)
+	}
+}
+
+func TestPauseAndResumeRejectIdleState(t *testing.T) {
+	runtime := Runtime{Directory: t.TempDir()}
+	if err := runtime.WriteState(State{Recording: false}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Pause(); !errors.Is(err, ErrNotRecording) {
+		t.Fatalf("Pause() error = %v, want ErrNotRecording", err)
+	}
+	if err := runtime.Resume(); !errors.Is(err, ErrNotRecording) {
+		t.Fatalf("Resume() error = %v, want ErrNotRecording", err)
+	}
+}

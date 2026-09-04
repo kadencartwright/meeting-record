@@ -22,20 +22,25 @@ import (
 var (
 	ErrAlreadyRecording = errors.New("a meeting recording is already active")
 	ErrNotRecording     = errors.New("no meeting recording is active")
+	ErrAlreadyPaused    = errors.New("the active recording is already paused")
+	ErrNotPaused        = errors.New("the active recording is not paused")
 )
 
 type StartedFunc func(State)
 
-type stopRequest struct {
-	done chan string
+type controlRequest struct {
+	command string
+	done    chan string
 }
 
 type Config struct {
-	Storage meeting.Storage
-	Runtime Runtime
-	Log     io.Writer
-	Started StartedFunc
-	Now     func() time.Time
+	Storage        meeting.Storage
+	Runtime        Runtime
+	Log            io.Writer
+	Started        StartedFunc
+	Now            func() time.Time
+	MicrophoneNode string
+	OutputNode     string
 }
 
 func Run(ctx context.Context, config Config) (runErr error) {
@@ -54,7 +59,7 @@ func Run(ctx context.Context, config Config) (runErr error) {
 	}
 	defer lock.Close()
 
-	devices, err := audio.Discover(ctx, audio.ExecRunner{})
+	devices, err := audio.ResolveSelection(ctx, audio.ExecRunner{}, config.MicrophoneNode, config.OutputNode)
 	if err != nil {
 		return err
 	}
@@ -121,27 +126,85 @@ func Run(ctx context.Context, config Config) (runErr error) {
 		config.Started(state)
 	}
 
-	stopRequests := make(chan stopRequest)
-	go serveControl(listener, stopRequests)
+	controlRequests := make(chan controlRequest)
+	go serveControl(listener, controlRequests)
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
 
 	var first *audio.Result
 	var failure string
-	var request *stopRequest
-	select {
-	case <-ctx.Done():
-	case <-signals:
-	case received := <-stopRequests:
-		request = &received
-	case result := <-results:
-		first = &result
-		failure = fmt.Sprintf("%s recorder exited unexpectedly: %v", result.Track, result.Err)
+	var stopRequest *controlRequest
+	var pausedAt *time.Time
+	var pausedDuration time.Duration
+	running := true
+	for running {
+		select {
+		case <-ctx.Done():
+			running = false
+		case <-signals:
+			running = false
+		case received := <-controlRequests:
+			switch received.command {
+			case "stop":
+				stopRequest = &received
+				running = false
+			case "pause":
+				if pausedAt != nil {
+					received.done <- ErrAlreadyPaused.Error()
+					continue
+				}
+				if pauseErr := pauseAll(processes); pauseErr != nil {
+					received.done <- pauseErr.Error()
+					continue
+				}
+				now := config.Now()
+				pausedAt = &now
+				state.Paused = true
+				state.Session.PausedAt = pausedAt
+				state.Session.PausedDurationSeconds = pausedDuration.Seconds()
+				if writeErr := config.Runtime.WriteState(state); writeErr != nil {
+					_ = resumeAll(processes)
+					pausedAt = nil
+					state.Paused = false
+					state.Session.PausedAt = nil
+					received.done <- writeErr.Error()
+					continue
+				}
+				received.done <- "ok"
+			case "resume":
+				if pausedAt == nil {
+					received.done <- ErrNotPaused.Error()
+					continue
+				}
+				if resumeErr := resumeAll(processes); resumeErr != nil {
+					received.done <- resumeErr.Error()
+					continue
+				}
+				pausedDuration += config.Now().Sub(*pausedAt)
+				pausedAt = nil
+				state.Paused = false
+				state.Session.PausedAt = nil
+				state.Session.PausedDurationSeconds = pausedDuration.Seconds()
+				if writeErr := config.Runtime.WriteState(state); writeErr != nil {
+					received.done <- writeErr.Error()
+					continue
+				}
+				received.done <- "ok"
+			}
+		case result := <-results:
+			first = &result
+			failure = fmt.Sprintf("%s recorder exited unexpectedly: %v", result.Track, result.Err)
+			running = false
+		}
 	}
 
+	if pausedAt != nil {
+		_ = resumeAll(processes)
+		pausedDuration += config.Now().Sub(*pausedAt)
+	}
 	stopAndCollect(processes, results, first)
-	metadata.Finish(config.Now(), failure)
+	metadata.FinishWithPaused(config.Now(), pausedDuration, failure)
 	if failure == "" {
 		mergeContext, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		merged, mergeErr := processing.Merge(mergeContext, processing.ExecRunner{}, directory, metadata)
@@ -160,11 +223,11 @@ func Run(ctx context.Context, config Config) (runErr error) {
 	if err := config.Runtime.WriteState(State{Recording: false}); err != nil && runErr == nil {
 		runErr = err
 	}
-	if request != nil {
+	if stopRequest != nil {
 		if runErr != nil {
-			request.done <- runErr.Error()
+			stopRequest.done <- runErr.Error()
 		} else {
-			request.done <- "ok"
+			stopRequest.done <- "ok"
 		}
 	}
 	if failure != "" && runErr == nil {
@@ -226,7 +289,29 @@ func collectWithin(results <-chan audio.Result, remaining int, timeout time.Dura
 	return 0
 }
 
-func serveControl(listener net.Listener, requests chan<- stopRequest) {
+func pauseAll(processes []*audio.Process) error {
+	for index, process := range processes {
+		if err := process.Pause(); err != nil {
+			for previous := 0; previous < index; previous++ {
+				_ = processes[previous].Resume()
+			}
+			return fmt.Errorf("pause %s recorder: %w", process.Track, err)
+		}
+	}
+	return nil
+}
+
+func resumeAll(processes []*audio.Process) error {
+	var first error
+	for _, process := range processes {
+		if err := process.Resume(); err != nil && first == nil {
+			first = fmt.Errorf("resume %s recorder: %w", process.Track, err)
+		}
+	}
+	return first
+}
+
+func serveControl(listener net.Listener, requests chan<- controlRequest) {
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
@@ -236,9 +321,9 @@ func serveControl(listener net.Listener, requests chan<- stopRequest) {
 	}
 }
 
-func handleControl(connection net.Conn, requests chan<- stopRequest) {
+func handleControl(connection net.Conn, requests chan<- controlRequest) {
 	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(20 * time.Second))
+	_ = connection.SetDeadline(time.Now().Add(11 * time.Minute))
 	command, err := bufio.NewReader(connection).ReadString('\n')
 	if err != nil {
 		return
@@ -246,9 +331,9 @@ func handleControl(connection net.Conn, requests chan<- stopRequest) {
 	switch strings.TrimSpace(command) {
 	case "ping":
 		_, _ = fmt.Fprintln(connection, "pong")
-	case "stop":
+	case "stop", "pause", "resume":
 		done := make(chan string, 1)
-		requests <- stopRequest{done: done}
+		requests <- controlRequest{command: strings.TrimSpace(command), done: done}
 		_, _ = fmt.Fprintln(connection, <-done)
 	default:
 		_, _ = fmt.Fprintln(connection, "unknown command")

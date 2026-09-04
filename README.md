@@ -37,8 +37,10 @@ nix develop -c go test ./...
 meeting-record devices
 meeting-record devices --json
 meeting-record start
-meeting-record start --detach
+meeting-record start --detach --microphone NODE_NAME --output NODE_NAME
 meeting-record stop
+meeting-record pause
+meeting-record resume
 meeting-record status --json
 meeting-record list --json
 meeting-record show SESSION --json
@@ -63,6 +65,14 @@ sends SIGINT first so FLAC containers finalize, waits, and escalates only if a
 child refuses to exit. If either track exits unexpectedly, the other is stopped
 and the session is marked failed.
 
+`start` uses the current defaults unless `--microphone` and/or `--output` select
+one of the stable `node.name` values returned by `devices --json`. Selection is
+per recording: it does not change WirePlumber defaults or reroute any stream.
+`pause` and `resume` ask the supervisor to stop/continue both `pw-record`
+process groups together. A paused session still survives terminal and
+Quickshell restarts. `stop` resumes paused writers before sending SIGINT so both
+FLAC containers can finalize.
+
 After both capture processes finalize, the supervisor runs `ffmpeg` to create
 `meeting.m4a`. It upmixes the microphone to stereo, mixes it with the complete
 output-sink track, and applies a limiter. The source tracks remain untouched.
@@ -82,6 +92,9 @@ wpctl inspect @DEFAULT_AUDIO_SINK@
 ```
 
 The stable `node.name` and human-readable `node.description` are retained. The
+JSON form also inventories current `Audio/Source` and `Audio/Sink` nodes from
+`wpctl status -n` (including source nodes exposed under PipeWire filters) so a
+caller can choose explicit devices safely. The
 local stream targets the source by name with `stream.monitor=true`. The remote
 stream targets the sink by name with `stream.capture.sink=true`; WirePlumber
 then links it to the sink's existing `monitor_*` output ports. This is passive
@@ -114,8 +127,10 @@ supervisor.log
 startup-error
 ```
 
-`state.json` is atomically replaced only at state transitions; it is not written
-every second. `status` verifies an active state against the socket rather than
+`state.json` is atomically replaced only at state transitions (including
+pause/resume); it is not written every second. It stores accumulated paused time
+so elapsed recording time can be reconstructed after a UI restart. `status`
+verifies an active state against the socket rather than
 trusting the file. If a supervisor was killed, the next status reconciliation
 marks runtime state idle and finalizes the session metadata as failed.
 
@@ -130,8 +145,9 @@ elapsed time from `startedAt`; it does not poll or write runtime state.
 ## Notion meeting notes
 
 `meeting-record upload SESSION` passes `meeting.m4a` to the official `ntn`
-CLI, then creates a native Notion AI meeting-notes block from the completed
-upload. The Go process uses explicit argument arrays and streams the file to
+CLI, creates a titled child page under the selected destination, and places a
+native Notion AI meeting-notes block inside that child page. The Go process uses
+explicit argument arrays and streams the file to
 `ntn` over stdin; it does not contain Notion credentials or make its own HTTP
 requests. A successful block ID is saved in `meeting.json`, and a second upload
 is refused to avoid duplicate meeting-note blocks.
@@ -171,9 +187,9 @@ available for a one-off terminal upload, and the legacy
 `MEETING_RECORD_NOTION_PARENT_PAGE_ID` environment variable remains supported.
 The selected destination ID and label are saved in `meeting.json`; parent page
 IDs are not exposed in the destination-list JSON consumed by desktop UIs.
-Successful uploads also save a direct block URL. `meeting-record notion SESSION`
-opens that meeting note, including older destination-aware sessions whose
-metadata predates the saved URL.
+Successful uploads save the child page ID and direct page URL.
+`meeting-record notion SESSION` opens that page. Older destination-aware
+sessions whose metadata predates saved URLs still open their original blocks.
 
 The integration requests automatic language detection and Notion's normal
 summary generation. The current Notion public API and `ntn` endpoint catalog do
@@ -190,12 +206,14 @@ integration.
 4. Speak into the microphone and play remote/system audio through the output.
 5. Confirm Meet's microphone and headphones continue to work without a device
    switch or a new virtual device.
-6. Stop the recorder cleanly.
+6. Pause, confirm elapsed time freezes, resume, then stop the recorder cleanly.
 7. Play `local.flac` and verify it contains microphone audio.
 8. Play `remote.flac` and verify it contains exactly the complete sink output,
    including any intentionally generated notification, music, or browser audio.
 9. Play `meeting.m4a` and verify it contains both sources.
 10. Inspect `meeting.json` and verify timestamps, devices, status, and duration.
+11. Upload a test session and verify Notion creates a titled subpage beneath the
+    selected destination, with the meeting-note block inside that page.
 
 For a shell-lifecycle test, start with `--detach`, reload or kill/restart
 Quickshell, verify `status --json` remains active, then stop from the reloaded

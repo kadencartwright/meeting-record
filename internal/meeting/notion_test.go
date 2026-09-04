@@ -21,3 +21,13 @@ func TestNotionBlockURLRejectsInvalidIDs(t *testing.T) {
 		t.Fatal("expected invalid IDs to fail")
 	}
 }
+
+func TestNotionPageURL(t *testing.T) {
+	got, err := NotionPageURL("3d12d5f2-8d7d-803f-a8ec-e1c7b133b4f5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://app.notion.com/p/3d12d5f28d7d803fa8ece1c7b133b4f5"; got != want {
+		t.Fatalf("NotionPageURL() = %q, want %q", got, want)
+	}
+}

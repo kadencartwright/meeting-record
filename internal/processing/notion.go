@@ -30,6 +30,11 @@ type meetingNoteResponse struct {
 	ID string `json:"id"`
 }
 
+type notionPageResponse struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
 func UploadToNotion(ctx context.Context, runner Runner, directory string, metadata meeting.Metadata, options NotionOptions) (meeting.NotionExport, error) {
 	if metadata.Notion != nil && metadata.Notion.BlockID != "" {
 		return meeting.NotionExport{}, fmt.Errorf("session is already uploaded to Notion as block %s", metadata.Notion.BlockID)
@@ -76,6 +81,38 @@ func UploadToNotion(ctx context.Context, runner Runner, directory string, metada
 	if language == "" {
 		language = "auto"
 	}
+	pageBody, err := json.Marshal(map[string]any{
+		"parent": map[string]string{
+			"type":    "page_id",
+			"page_id": strings.TrimSpace(options.ParentPageID),
+		},
+		"properties": map[string]any{
+			"title": map[string]any{
+				"type": "title",
+				"title": []any{map[string]any{
+					"type": "text",
+					"text": map[string]any{"content": title},
+				}},
+			},
+		},
+	})
+	if err != nil {
+		return meeting.NotionExport{}, fmt.Errorf("serialize Notion child page request: %w", err)
+	}
+	pageOutput, err := runner.Run(ctx, "ntn", []string{
+		"api", "/v1/pages", "-X", "POST", "-d", string(pageBody),
+	}, nil)
+	if err != nil {
+		return meeting.NotionExport{}, fmt.Errorf("create Notion meeting page: %w", err)
+	}
+	var page notionPageResponse
+	if err := json.Unmarshal(pageOutput, &page); err != nil {
+		return meeting.NotionExport{}, fmt.Errorf("parse Notion child page response: %w", err)
+	}
+	if page.ID == "" {
+		return meeting.NotionExport{}, fmt.Errorf("Notion child page response contained no page id")
+	}
+
 	body, err := json.Marshal(map[string]any{
 		"source": map[string]string{
 			"type":           "file_upload",
@@ -83,7 +120,7 @@ func UploadToNotion(ctx context.Context, runner Runner, directory string, metada
 		},
 		"parent": map[string]string{
 			"type":    "page_id",
-			"page_id": strings.TrimSpace(options.ParentPageID),
+			"page_id": page.ID,
 		},
 		"title":    title,
 		"language": language,
@@ -98,18 +135,25 @@ func UploadToNotion(ctx context.Context, runner Runner, directory string, metada
 		"api", "/v1/blocks/meeting_notes", "-X", "POST", "-d", string(body),
 	}, nil)
 	if err != nil {
+		archiveNotionPage(ctx, runner, page.ID)
 		return meeting.NotionExport{}, fmt.Errorf("create Notion meeting note: %w", err)
 	}
 	var note meetingNoteResponse
 	if err := json.Unmarshal(noteOutput, &note); err != nil {
+		archiveNotionPage(ctx, runner, page.ID)
 		return meeting.NotionExport{}, fmt.Errorf("parse Notion meeting note response: %w", err)
 	}
 	if note.ID == "" {
+		archiveNotionPage(ctx, runner, page.ID)
 		return meeting.NotionExport{}, fmt.Errorf("Notion meeting note response contained no block id")
 	}
-	notionURL, _ := meeting.NotionBlockURL(options.ParentPageID, note.ID)
+	notionURL := strings.TrimSpace(page.URL)
+	if notionURL == "" {
+		notionURL, _ = meeting.NotionPageURL(page.ID)
+	}
 	return meeting.NotionExport{
 		FileUploadID:    upload.ID,
+		PageID:          page.ID,
 		BlockID:         note.ID,
 		UploadedAt:      time.Now(),
 		Status:          "processing",
@@ -117,4 +161,11 @@ func UploadToNotion(ctx context.Context, runner Runner, directory string, metada
 		DestinationName: options.DestinationName,
 		URL:             notionURL,
 	}, nil
+}
+
+func archiveNotionPage(ctx context.Context, runner Runner, pageID string) {
+	body, _ := json.Marshal(map[string]bool{"in_trash": true})
+	_, _ = runner.Run(ctx, "ntn", []string{
+		"api", "/v1/pages/" + pageID, "-X", "PATCH", "-d", string(body),
+	}, nil)
 }

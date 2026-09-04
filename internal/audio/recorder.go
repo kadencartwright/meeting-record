@@ -55,17 +55,18 @@ func (p *Process) Start() error {
 }
 
 func (p *Process) Interrupt() error {
-	if p.Cmd.Process == nil {
-		return nil
-	}
-	err := syscall.Kill(-p.Cmd.Process.Pid, syscall.SIGINT)
-	if err == syscall.ESRCH {
-		return nil
-	}
-	return err
+	return p.signal(syscall.SIGINT)
 }
 
-func (p *Process) Terminate(signal syscall.Signal) error {
+func (p *Process) Pause() error {
+	return p.signal(syscall.SIGSTOP)
+}
+
+func (p *Process) Resume() error {
+	return p.signal(syscall.SIGCONT)
+}
+
+func (p *Process) signal(signal syscall.Signal) error {
 	if p.Cmd.Process == nil {
 		return nil
 	}
@@ -74,6 +75,10 @@ func (p *Process) Terminate(signal syscall.Signal) error {
 		return nil
 	}
 	return err
+}
+
+func (p *Process) Terminate(signal syscall.Signal) error {
+	return p.signal(signal)
 }
 
 type Result struct {

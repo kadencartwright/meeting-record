@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,5 +108,23 @@ func TestNotionExportURLFallsBackToDestination(t *testing.T) {
 	want := "https://app.notion.com/p/3d12d5f28d7d804aa6dbd6938bf100f7#3d12d5f28d7d810b93f0d50e21d75142"
 	if got != want {
 		t.Fatalf("notionExportURL() = %q, want %q", got, want)
+	}
+}
+
+func TestNotionExportURLUsesChildPage(t *testing.T) {
+	got, err := notionExportURL(meeting.NotionExport{PageID: "3d12d5f2-8d7d-8000-a111-111111111111"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://app.notion.com/p/3d12d5f28d7d8000a111111111111111"; got != want {
+		t.Fatalf("notionExportURL() = %q, want %q", got, want)
+	}
+}
+
+func TestAppendSelectionArguments(t *testing.T) {
+	got := appendSelectionArguments([]string{"_supervise"}, "source.node", "sink.node")
+	want := []string{"_supervise", "--microphone", "source.node", "--output", "sink.node"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("appendSelectionArguments() = %#v, want %#v", got, want)
 	}
 }

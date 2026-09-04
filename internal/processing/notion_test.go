@@ -31,6 +31,9 @@ func (runner *notionRunner) Run(_ context.Context, name string, args []string, s
 	if len(runner.calls) == 1 {
 		return []byte(`{"id":"upload-id","status":"uploaded"}`), nil
 	}
+	if len(runner.calls) == 2 {
+		return []byte(`{"object":"page","id":"3d12d5f2-8d7d-8000-a111-111111111111","url":"https://app.notion.com/p/Meeting-3d12d5f28d7d8000a111111111111111"}`), nil
+	}
 	return []byte(`{"object":"block","id":"3d12d5f2-8d7d-803f-a8ec-e1c7b133b4f5"}`), nil
 }
 
@@ -51,39 +54,59 @@ func TestUploadToNotionUsesCLIAndCreatesMeetingNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.FileUploadID != "upload-id" || result.BlockID != "3d12d5f2-8d7d-803f-a8ec-e1c7b133b4f5" || result.Status != "processing" {
+	if result.FileUploadID != "upload-id" || result.PageID != "3d12d5f2-8d7d-8000-a111-111111111111" || result.BlockID != "3d12d5f2-8d7d-803f-a8ec-e1c7b133b4f5" || result.Status != "processing" {
 		t.Fatalf("unexpected Notion result: %#v", result)
 	}
 	if result.DestinationID != "team" || result.DestinationName != "Team meetings" {
 		t.Fatalf("destination was not retained: %#v", result)
 	}
-	if result.URL != "https://app.notion.com/p/3d12d5f28d7d8067ad48c686bec6fb0a#3d12d5f28d7d803fa8ece1c7b133b4f5" {
+	if result.URL != "https://app.notion.com/p/Meeting-3d12d5f28d7d8000a111111111111111" {
 		t.Fatalf("unexpected Notion URL: %q", result.URL)
 	}
-	if len(runner.calls) != 2 || runner.calls[0].name != "ntn" || runner.calls[1].name != "ntn" {
+	if len(runner.calls) != 3 || runner.calls[0].name != "ntn" || runner.calls[1].name != "ntn" || runner.calls[2].name != "ntn" {
 		t.Fatalf("unexpected calls: %#v", runner.calls)
 	}
 	if runner.calls[0].stdin != "audio" || !containsSequence(runner.calls[0].args, []string{"files", "create", "--json"}) {
 		t.Fatalf("unexpected upload call: %#v", runner.calls[0])
 	}
-	dataIndex := -1
-	for index, argument := range runner.calls[1].args {
-		if argument == "-d" && index+1 < len(runner.calls[1].args) {
-			dataIndex = index + 1
-			break
-		}
+	pageDataIndex := dataArgumentIndex(runner.calls[1].args)
+	if pageDataIndex == -1 {
+		t.Fatalf("child page call has no JSON body: %#v", runner.calls[1])
 	}
+	var pageBody map[string]any
+	if err := json.Unmarshal([]byte(runner.calls[1].args[pageDataIndex]), &pageBody); err != nil {
+		t.Fatal(err)
+	}
+	pageParent := pageBody["parent"].(map[string]any)
+	if pageParent["page_id"] != "3d12d5f2-8d7d-8067-ad48-c686bec6fb0a" {
+		t.Fatalf("unexpected child page parent: %#v", pageBody)
+	}
+	properties := pageBody["properties"].(map[string]any)
+	if _, ok := properties["title"]; !ok {
+		t.Fatalf("child page has no title: %#v", pageBody)
+	}
+
+	dataIndex := dataArgumentIndex(runner.calls[2].args)
 	if dataIndex == -1 {
-		t.Fatalf("meeting note call has no JSON body: %#v", runner.calls[1])
+		t.Fatalf("meeting note call has no JSON body: %#v", runner.calls[2])
 	}
 	var body map[string]any
-	if err := json.Unmarshal([]byte(runner.calls[1].args[dataIndex]), &body); err != nil {
+	if err := json.Unmarshal([]byte(runner.calls[2].args[dataIndex]), &body); err != nil {
 		t.Fatal(err)
 	}
 	parent := body["parent"].(map[string]any)
-	if parent["page_id"] != "3d12d5f2-8d7d-8067-ad48-c686bec6fb0a" {
-		t.Fatalf("unexpected meeting note parent: %#v", body)
+	if parent["page_id"] != "3d12d5f2-8d7d-8000-a111-111111111111" {
+		t.Fatalf("meeting note was not nested in child page: %#v", body)
 	}
+}
+
+func dataArgumentIndex(arguments []string) int {
+	for index, argument := range arguments {
+		if argument == "-d" && index+1 < len(arguments) {
+			return index + 1
+		}
+	}
+	return -1
 }
 
 func TestUploadToNotionRequiresParentPage(t *testing.T) {

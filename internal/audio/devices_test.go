@@ -72,3 +72,66 @@ func TestDiscoverReportsRunnerFailure(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
+
+func TestParseAudioNodeIDsIncludesFilterSources(t *testing.T) {
+	status := `PipeWire 'pipewire-0'
+Audio
+ ├─ Sinks:
+ │  *   82. alsa_output.speaker [vol: 1.00]
+ ├─ Sources:
+ │      74. alsa_input.internal [vol: 1.00]
+ ├─ Filters:
+ │      79. bluez_input.headset [Audio/Source]
+ │      80. ignored.stream [Stream/Input/Audio/Internal]
+ └─ Streams:
+        64. Firefox
+            119. output_FL > speaker:playback_FL
+Video
+`
+	want := []int{82, 74, 79, 80, 64, 119}
+	if got := ParseAudioNodeIDs([]byte(status)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseAudioNodeIDs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestDiscoverAvailableAndResolveSelection(t *testing.T) {
+	usbSource := `id 79, type PipeWire:Interface:Node
+  * media.class = "Audio/Source"
+  * node.description = "USB microphone"
+  * node.name = "alsa_input.usb"
+`
+	hdmiSink := `id 83, type PipeWire:Interface:Node
+  * media.class = "Audio/Sink"
+  * node.description = "HDMI output"
+  * node.name = "alsa_output.hdmi"
+`
+	stream := `id 64, type PipeWire:Interface:Node
+  * media.class = "Stream/Output/Audio"
+  * node.name = "firefox"
+`
+	runner := fakeRunner{outputs: map[string][]byte{
+		DefaultSinkAlias:   []byte(sinkInspect),
+		DefaultSourceAlias: []byte(sourceInspect),
+		"-n":               []byte("Audio\n  79. source\n  83. sink\n  64. stream\nVideo\n"),
+		"79":               []byte(usbSource),
+		"83":               []byte(hdmiSink),
+		"64":               []byte(stream),
+	}}
+	inventory, err := DiscoverAvailable(context.Background(), runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Microphones) != 2 || len(inventory.Outputs) != 2 {
+		t.Fatalf("unexpected inventory: %#v", inventory)
+	}
+	selected, err := ResolveSelection(context.Background(), runner, "alsa_input.usb", "alsa_output.hdmi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Microphone.Description != "USB microphone" || selected.Output.Description != "HDMI output" {
+		t.Fatalf("unexpected selection: %#v", selected)
+	}
+	if _, err := ResolveSelection(context.Background(), runner, "missing", ""); err == nil {
+		t.Fatal("expected unavailable selection to fail")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,15 +16,18 @@ import (
 )
 
 type SessionState struct {
-	ID         string       `json:"id"`
-	StartedAt  time.Time    `json:"startedAt"`
-	Directory  string       `json:"directory"`
-	Microphone audio.Device `json:"microphone"`
-	Output     audio.Device `json:"output"`
+	ID                    string       `json:"id"`
+	StartedAt             time.Time    `json:"startedAt"`
+	Directory             string       `json:"directory"`
+	Microphone            audio.Device `json:"microphone"`
+	Output                audio.Device `json:"output"`
+	PausedAt              *time.Time   `json:"pausedAt,omitempty"`
+	PausedDurationSeconds float64      `json:"pausedDurationSeconds,omitempty"`
 }
 
 type State struct {
 	Recording bool          `json:"recording"`
+	Paused    bool          `json:"paused"`
 	Session   *SessionState `json:"session"`
 }
 
@@ -168,12 +172,30 @@ func (r Runtime) ping() error {
 }
 
 func (r Runtime) Stop() error {
+	return r.request("stop", 11*time.Minute)
+}
+
+func (r Runtime) Pause() error {
+	return r.request("pause", 5*time.Second)
+}
+
+func (r Runtime) Resume() error {
+	return r.request("resume", 5*time.Second)
+}
+
+func (r Runtime) request(command string, timeout time.Duration) error {
 	state, stale, err := r.Inspect()
 	if err != nil {
 		return err
 	}
 	if stale || !state.Recording {
 		return ErrNotRecording
+	}
+	if command == "pause" && state.Paused {
+		return ErrAlreadyPaused
+	}
+	if command == "resume" && !state.Paused {
+		return ErrNotPaused
 	}
 	connection, err := net.DialTimeout("unix", r.SocketPath(), time.Second)
 	if err != nil {
@@ -182,16 +204,16 @@ func (r Runtime) Stop() error {
 	defer connection.Close()
 	// Finalization includes encoding the merged M4A after both FLAC writers
 	// close, so allow long recordings enough time to finish cleanly.
-	_ = connection.SetDeadline(time.Now().Add(11 * time.Minute))
-	if _, err := fmt.Fprintln(connection, "stop"); err != nil {
-		return fmt.Errorf("request recording stop: %w", err)
+	_ = connection.SetDeadline(time.Now().Add(timeout))
+	if _, err := fmt.Fprintln(connection, command); err != nil {
+		return fmt.Errorf("request recording %s: %w", command, err)
 	}
 	reply, err := bufio.NewReader(connection).ReadString('\n')
 	if err != nil {
-		return fmt.Errorf("wait for recording finalization: %w", err)
+		return fmt.Errorf("wait for recording %s: %w", command, err)
 	}
 	if reply != "ok\n" {
-		return fmt.Errorf("supervisor stop failed: %s", reply)
+		return fmt.Errorf("supervisor %s failed: %s", command, strings.TrimSpace(reply))
 	}
 	return nil
 }

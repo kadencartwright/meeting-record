@@ -18,6 +18,16 @@ func NotionBlockURL(parentPageID, blockID string) (string, error) {
 	return "https://app.notion.com/p/" + parent + "#" + block, nil
 }
 
+// NotionPageURL returns a stable link for a page when the API response did not
+// include its workspace-specific URL.
+func NotionPageURL(pageID string) (string, error) {
+	page, err := normalizeNotionID(pageID)
+	if err != nil {
+		return "", fmt.Errorf("invalid Notion page id: %w", err)
+	}
+	return "https://app.notion.com/p/" + page, nil
+}
+
 func normalizeNotionID(value string) (string, error) {
 	value = strings.ReplaceAll(strings.TrimSpace(value), "-", "")
 	if len(value) != 32 {

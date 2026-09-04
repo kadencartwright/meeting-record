@@ -24,8 +24,10 @@ const usage = `meeting-record records the default microphone and the complete de
 
 Usage:
   meeting-record devices [--json]
-  meeting-record start [--detach]
+  meeting-record start [--detach] [--microphone NODE] [--output NODE]
   meeting-record stop
+  meeting-record pause
+  meeting-record resume
   meeting-record status [--json]
   meeting-record list [--json]
   meeting-record show <session> [--json]
@@ -80,6 +82,10 @@ func (app application) run(args []string) error {
 		return app.start(args[1:])
 	case "stop":
 		return app.stop(args[1:])
+	case "pause":
+		return app.pause(args[1:])
+	case "resume":
+		return app.resume(args[1:])
 	case "status":
 		return app.status(args[1:])
 	case "list":
@@ -118,7 +124,7 @@ func (app application) devices(args []string) error {
 	if err := audio.CheckDependencies(); err != nil {
 		return err
 	}
-	devices, err := audio.Discover(context.Background(), audio.ExecRunner{})
+	devices, err := audio.DiscoverAvailable(context.Background(), audio.ExecRunner{})
 	if err != nil {
 		return err
 	}
@@ -135,6 +141,8 @@ func (app application) start(args []string) error {
 	flags := flag.NewFlagSet("start", flag.ContinueOnError)
 	flags.SetOutput(app.errOut)
 	detach := flags.Bool("detach", false, "run the recording supervisor independently")
+	microphone := flags.String("microphone", "", "record the selected Audio/Source node.name")
+	output := flags.String("output", "", "record the selected Audio/Sink node.name")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -149,11 +157,12 @@ func (app application) start(args []string) error {
 		return supervisor.ErrAlreadyRecording
 	}
 	if *detach {
-		return app.startDetached()
+		return app.startDetached(*microphone, *output)
 	}
 	var started supervisor.State
 	err = supervisor.Run(context.Background(), supervisor.Config{
 		Storage: app.storage, Runtime: app.runtime, Log: app.errOut,
+		MicrophoneNode: *microphone, OutputNode: *output,
 		Started: func(state supervisor.State) {
 			started = state
 			fmt.Fprintf(app.out, "\nRecording meeting\n\n  microphone  %s\n  output      %s\n  directory   %s\n\nPress Ctrl-C to stop.\n",
@@ -174,7 +183,7 @@ type readyMessage struct {
 	Error     string `json:"error,omitempty"`
 }
 
-func (app application) startDetached() error {
+func (app application) startDetached(microphone, output string) error {
 	if err := app.runtime.Prepare(); err != nil {
 		return err
 	}
@@ -188,22 +197,24 @@ func (app application) startDetached() error {
 		}
 	}
 	if systemdRun, lookupErr := exec.LookPath("systemd-run"); lookupErr == nil {
-		return app.startDetachedSystemd(systemdRun, executable)
+		return app.startDetachedSystemd(systemdRun, executable, microphone, output)
 	}
-	return app.startDetachedSession(executable)
+	return app.startDetachedSession(executable, microphone, output)
 }
 
-func (app application) startDetachedSystemd(systemdRun, executable string) error {
-	command := exec.Command(systemdRun,
+func (app application) startDetachedSystemd(systemdRun, executable, microphone, output string) error {
+	arguments := []string{
 		"--user", "--quiet", "--collect",
 		"--unit=meeting-record-supervisor",
 		"--service-type=exec",
 		executable, "_supervise",
-	)
-	if output, err := command.CombinedOutput(); err != nil {
-		message := strings.TrimSpace(string(output))
+	}
+	arguments = appendSelectionArguments(arguments, microphone, output)
+	command := exec.Command(systemdRun, arguments...)
+	if commandOutput, err := command.CombinedOutput(); err != nil {
+		message := strings.TrimSpace(string(commandOutput))
 		if strings.Contains(message, "Failed to connect to bus") || strings.Contains(message, "not been booted with systemd") {
-			return app.startDetachedSession(executable)
+			return app.startDetachedSession(executable, microphone, output)
 		}
 		return fmt.Errorf("start recording supervisor unit: %s", message)
 	}
@@ -223,7 +234,7 @@ func (app application) startDetachedSystemd(systemdRun, executable string) error
 	return fmt.Errorf("timed out waiting for recording supervisor startup")
 }
 
-func (app application) startDetachedSession(executable string) error {
+func (app application) startDetachedSession(executable, microphone, output string) error {
 	logFile, err := os.OpenFile(app.runtime.LogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("open supervisor log: %w", err)
@@ -234,7 +245,8 @@ func (app application) startDetachedSession(executable string) error {
 		return fmt.Errorf("create supervisor readiness pipe: %w", err)
 	}
 	defer readPipe.Close()
-	command := exec.Command(executable, "_supervise", "--ready-fd", "3")
+	arguments := appendSelectionArguments([]string{"_supervise", "--ready-fd", "3"}, microphone, output)
+	command := exec.Command(executable, arguments...)
 	command.Stdin = nil
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -273,6 +285,8 @@ func (app application) startDetachedSession(executable string) error {
 func (app application) supervise(args []string) error {
 	flags := flag.NewFlagSet("_supervise", flag.ContinueOnError)
 	readyFD := flags.Int("ready-fd", -1, "internal readiness file descriptor")
+	microphone := flags.String("microphone", "", "internal microphone node")
+	output := flags.String("output", "", "internal output node")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -296,6 +310,7 @@ func (app application) supervise(args []string) error {
 	started := false
 	err := supervisor.Run(context.Background(), supervisor.Config{
 		Storage: app.storage, Runtime: app.runtime, Log: app.errOut,
+		MicrophoneNode: *microphone, OutputNode: *output,
 		Started: func(state supervisor.State) {
 			started = true
 			send(readyMessage{OK: true, SessionID: state.Session.ID, Directory: state.Session.Directory})
@@ -328,6 +343,28 @@ func (app application) stop(args []string) error {
 	return nil
 }
 
+func (app application) pause(args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("pause takes no arguments")
+	}
+	if err := app.runtime.Pause(); err != nil {
+		return err
+	}
+	fmt.Fprintln(app.out, "Recording paused")
+	return nil
+}
+
+func (app application) resume(args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("resume takes no arguments")
+	}
+	if err := app.runtime.Resume(); err != nil {
+		return err
+	}
+	fmt.Fprintln(app.out, "Recording resumed")
+	return nil
+}
+
 func (app application) status(args []string) error {
 	jsonOutput, rest, err := parseJSONFlag("status", args)
 	if err != nil || len(rest) != 0 {
@@ -350,8 +387,12 @@ func (app application) status(args []string) error {
 		fmt.Fprintln(app.out, "Not recording")
 		return nil
 	}
-	fmt.Fprintf(app.out, "Recording\n\n  session     %s\n  elapsed     %s\n  microphone  %s\n  output      %s\n  directory   %s\n",
-		state.Session.ID, formatDuration(time.Since(state.Session.StartedAt)), state.Session.Microphone.Description,
+	status := "Recording"
+	if state.Paused {
+		status = "Paused"
+	}
+	fmt.Fprintf(app.out, "%s\n\n  session     %s\n  elapsed     %s\n  microphone  %s\n  output      %s\n  directory   %s\n",
+		status, state.Session.ID, formatDuration(activeDuration(state, time.Now())), state.Session.Microphone.Description,
 		state.Session.Output.Description, state.Session.Directory)
 	return nil
 }
@@ -450,6 +491,9 @@ func (app application) notion(args []string) error {
 func notionExportURL(notion meeting.NotionExport) (string, error) {
 	if notionURL := strings.TrimSpace(notion.URL); notionURL != "" {
 		return notionURL, nil
+	}
+	if strings.TrimSpace(notion.PageID) != "" {
+		return meeting.NotionPageURL(notion.PageID)
 	}
 	destination, err := resolveDestination(uploadOptions{Destination: notion.DestinationID})
 	if err != nil {
@@ -609,7 +653,7 @@ func (app application) upload(args []string) error {
 	if options.JSON {
 		return writeJSON(app.out, notion)
 	}
-	fmt.Fprintf(app.out, "Notion meeting note created\n\n  destination %s\n  block       %s\n  upload      %s\n", destination.Label, notion.BlockID, notion.FileUploadID)
+	fmt.Fprintf(app.out, "Notion meeting page created\n\n  destination %s\n  page        %s\n  block       %s\n  upload      %s\n", destination.Label, notion.PageID, notion.BlockID, notion.FileUploadID)
 	return nil
 }
 
@@ -720,7 +764,8 @@ func (app application) inspect() (supervisor.State, bool, error) {
 	if stale && state.Session != nil {
 		metadata, directory, loadErr := app.storage.Load(state.Session.ID)
 		if loadErr == nil && metadata.EndedAt == nil {
-			metadata.Finish(time.Now(), "recording supervisor exited unexpectedly")
+			now := time.Now()
+			metadata.FinishWithPaused(now, pausedDuration(state, now), "recording supervisor exited unexpectedly")
 			_ = app.storage.Write(directory, metadata)
 		}
 	}
@@ -728,6 +773,34 @@ func (app application) inspect() (supervisor.State, bool, error) {
 		return supervisor.State{Recording: false}, true, nil
 	}
 	return state, stale, nil
+}
+
+func appendSelectionArguments(arguments []string, microphone, output string) []string {
+	if node := strings.TrimSpace(microphone); node != "" {
+		arguments = append(arguments, "--microphone", node)
+	}
+	if node := strings.TrimSpace(output); node != "" {
+		arguments = append(arguments, "--output", node)
+	}
+	return arguments
+}
+
+func pausedDuration(state supervisor.State, now time.Time) time.Duration {
+	if state.Session == nil {
+		return 0
+	}
+	duration := time.Duration(state.Session.PausedDurationSeconds * float64(time.Second))
+	if state.Paused && state.Session.PausedAt != nil {
+		duration += max(0, now.Sub(*state.Session.PausedAt))
+	}
+	return duration
+}
+
+func activeDuration(state supervisor.State, now time.Time) time.Duration {
+	if state.Session == nil {
+		return 0
+	}
+	return max(0, now.Sub(state.Session.StartedAt)-pausedDuration(state, now))
 }
 
 func launch(binary string, argument string) error {
