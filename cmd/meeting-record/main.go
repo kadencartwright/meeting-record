@@ -16,6 +16,7 @@ import (
 
 	"github.com/kadencartwright/meeting-record/internal/audio"
 	"github.com/kadencartwright/meeting-record/internal/meeting"
+	"github.com/kadencartwright/meeting-record/internal/processing"
 	"github.com/kadencartwright/meeting-record/internal/supervisor"
 )
 
@@ -29,7 +30,9 @@ Usage:
   meeting-record list [--json]
   meeting-record show <session> [--json]
   meeting-record open <session>
-  meeting-record play <session> [local|remote]
+  meeting-record play <session> [meeting|local|remote]
+  meeting-record mix <session>
+  meeting-record upload [--parent-page ID] [--title TITLE] <session> [--json]
   meeting-record delete <session>
 `
 
@@ -85,6 +88,10 @@ func (app application) run(args []string) error {
 		return app.open(args[1:])
 	case "play":
 		return app.play(args[1:])
+	case "mix":
+		return app.mix(args[1:])
+	case "upload":
+		return app.upload(args[1:])
 	case "delete":
 		return app.delete(args[1:])
 	case "_supervise":
@@ -148,7 +155,7 @@ func (app application) start(args []string) error {
 		},
 	})
 	if started.Session != nil {
-		fmt.Fprintf(app.out, "\nRecording saved\n\n  duration    %s\n  local       local.flac\n  remote      remote.flac\n  directory   %s\n",
+		fmt.Fprintf(app.out, "\nRecording saved\n\n  duration    %s\n  meeting     meeting.m4a\n  local       local.flac\n  remote      remote.flac\n  directory   %s\n",
 			formatDuration(time.Since(started.Session.StartedAt)), started.Session.Directory)
 	}
 	return err
@@ -418,9 +425,9 @@ func (app application) open(args []string) error {
 
 func (app application) play(args []string) error {
 	if len(args) < 1 || len(args) > 2 {
-		return fmt.Errorf("usage: meeting-record play <session> [local|remote]")
+		return fmt.Errorf("usage: meeting-record play <session> [meeting|local|remote]")
 	}
-	track := "remote"
+	track := "meeting"
 	if len(args) == 2 {
 		track = args[1]
 	}
@@ -428,17 +435,153 @@ func (app application) play(args []string) error {
 	if err != nil {
 		return err
 	}
-	filename := metadata.Remote.File
-	if track == "local" {
+	filename := ""
+	if track == "meeting" {
+		if metadata.Merged != nil {
+			filename = metadata.Merged.File
+		}
+		if filename == "" {
+			return fmt.Errorf("merged meeting audio is unavailable; run meeting-record mix %s", args[0])
+		}
+	} else if track == "local" {
 		filename = metadata.Local.File
-	} else if track != "remote" {
-		return fmt.Errorf("track must be local or remote")
+	} else if track == "remote" {
+		filename = metadata.Remote.File
+	} else {
+		return fmt.Errorf("track must be meeting, local, or remote")
 	}
 	path := filepath.Join(directory, filename)
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("recording file unavailable: %w", err)
 	}
 	return launch("xdg-open", path)
+}
+
+func (app application) mix(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: meeting-record mix <session>")
+	}
+	metadata, directory, err := app.loadInactive(args[0])
+	if err != nil {
+		return err
+	}
+	merged, err := mixSession(directory, metadata)
+	if err != nil {
+		metadata.MergeFailure = err.Error()
+		_ = app.storage.Write(directory, metadata)
+		return err
+	}
+	metadata.Merged = &merged
+	metadata.MergeFailure = ""
+	if err := app.storage.Write(directory, metadata); err != nil {
+		return err
+	}
+	fmt.Fprintln(app.out, filepath.Join(directory, merged.File))
+	return nil
+}
+
+type uploadOptions struct {
+	SessionID  string
+	ParentPage string
+	Title      string
+	JSON       bool
+}
+
+func (app application) upload(args []string) error {
+	options, err := parseUploadOptions(args)
+	if err != nil {
+		return err
+	}
+	metadata, directory, err := app.loadInactive(options.SessionID)
+	if err != nil {
+		return err
+	}
+	if metadata.Notion != nil && metadata.Notion.BlockID != "" {
+		return fmt.Errorf("session is already uploaded to Notion as block %s", metadata.Notion.BlockID)
+	}
+	if metadata.Merged == nil || metadata.Merged.File == "" {
+		merged, mergeErr := mixSession(directory, metadata)
+		if mergeErr != nil {
+			metadata.MergeFailure = mergeErr.Error()
+			_ = app.storage.Write(directory, metadata)
+			return mergeErr
+		}
+		metadata.Merged = &merged
+		metadata.MergeFailure = ""
+		if err := app.storage.Write(directory, metadata); err != nil {
+			return err
+		}
+	}
+	parentPage := strings.TrimSpace(options.ParentPage)
+	if parentPage == "" {
+		parentPage = strings.TrimSpace(os.Getenv("MEETING_RECORD_NOTION_PARENT_PAGE_ID"))
+	}
+	uploadContext, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	defer cancel()
+	notion, err := processing.UploadToNotion(uploadContext, processing.ExecRunner{}, directory, metadata, processing.NotionOptions{
+		ParentPageID: parentPage, Title: options.Title, Language: "auto", KickoffSummary: true,
+	})
+	if err != nil {
+		return err
+	}
+	metadata.Notion = &notion
+	if err := app.storage.Write(directory, metadata); err != nil {
+		return err
+	}
+	if options.JSON {
+		return writeJSON(app.out, notion)
+	}
+	fmt.Fprintf(app.out, "Notion meeting note created\n\n  block       %s\n  upload      %s\n", notion.BlockID, notion.FileUploadID)
+	return nil
+}
+
+func (app application) loadInactive(id string) (meeting.Metadata, string, error) {
+	state, _, err := app.inspect()
+	if err != nil {
+		return meeting.Metadata{}, "", err
+	}
+	if state.Recording && state.Session != nil && state.Session.ID == id {
+		return meeting.Metadata{}, "", fmt.Errorf("session %s is still recording", id)
+	}
+	return app.storage.Load(id)
+}
+
+func mixSession(directory string, metadata meeting.Metadata) (meeting.AudioFile, error) {
+	mergeContext, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	return processing.Merge(mergeContext, processing.ExecRunner{}, directory, metadata)
+}
+
+func parseUploadOptions(args []string) (uploadOptions, error) {
+	var options uploadOptions
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--json":
+			options.JSON = true
+		case "--parent-page", "--title":
+			if index+1 >= len(args) {
+				return options, fmt.Errorf("upload: %s requires a value", args[index])
+			}
+			index++
+			if args[index-1] == "--parent-page" {
+				options.ParentPage = args[index]
+			} else {
+				options.Title = args[index]
+			}
+		default:
+			if strings.HasPrefix(args[index], "-") {
+				return options, fmt.Errorf("upload: unknown option %s", args[index])
+			}
+			if options.SessionID != "" {
+				return options, fmt.Errorf("usage: meeting-record upload [--parent-page ID] [--title TITLE] <session> [--json]")
+			}
+			options.SessionID = args[index]
+		}
+	}
+	if options.SessionID == "" {
+		return options, fmt.Errorf("usage: meeting-record upload [--parent-page ID] [--title TITLE] <session> [--json]")
+	}
+	return options, nil
 }
 
 func (app application) delete(args []string) error {

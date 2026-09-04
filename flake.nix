@@ -17,11 +17,35 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-        in
-        {
-          default = pkgs.buildGoModule {
+          notionPlatform = {
+            x86_64-linux = "linux-x64";
+            aarch64-linux = "linux-arm64";
+          }.${system};
+          notionCli = pkgs.stdenvNoCC.mkDerivation {
+            pname = "notion-cli";
+            version = "0.23.1";
+            src = pkgs.fetchurl {
+              url = "https://registry.npmjs.org/ntn/-/ntn-0.23.1.tgz";
+              hash = "sha256-VG5RxGbvczsins1ilD3aIPeVYfDabZIvXIKWja5BTTc=";
+            };
+            sourceRoot = "package";
+            dontStrip = true;
+            installPhase = ''
+              runHook preInstall
+              install -Dm755 dist/ntn-${notionPlatform}/ntn $out/bin/ntn
+              runHook postInstall
+            '';
+            meta = {
+              description = "Official Notion command-line interface";
+              homepage = "https://developers.notion.com/cli/get-started/overview";
+              license = pkgs.lib.licenses.mit;
+              mainProgram = "ntn";
+              platforms = pkgs.lib.platforms.linux;
+            };
+          };
+          meetingRecord = pkgs.buildGoModule {
             pname = "meeting-record";
-            version = "0.1.0";
+            version = "0.2.0";
             src = self;
             vendorHash = null;
 
@@ -29,10 +53,12 @@
             postInstall = ''
               wrapProgram $out/bin/meeting-record \
                 --prefix PATH : ${pkgs.lib.makeBinPath [
+                  pkgs.ffmpeg
                   pkgs.pipewire
                   pkgs.systemd
                   pkgs.wireplumber
                   pkgs.xdg-utils
+                  notionCli
                 ]}
             '';
 
@@ -44,6 +70,11 @@
               platforms = pkgs.lib.platforms.linux;
             };
           };
+        in
+        {
+          default = meetingRecord;
+          meeting-record = meetingRecord;
+          notion-cli = notionCli;
         }
       );
 
@@ -64,6 +95,7 @@
             packages = [
               pkgs.go
               pkgs.gopls
+              pkgs.ffmpeg
               pkgs.pipewire
               pkgs.wireplumber
             ];

@@ -180,7 +180,9 @@ func (r Runtime) Stop() error {
 		return fmt.Errorf("connect to recording supervisor: %w", err)
 	}
 	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(15 * time.Second))
+	// Finalization includes encoding the merged M4A after both FLAC writers
+	// close, so allow long recordings enough time to finish cleanly.
+	_ = connection.SetDeadline(time.Now().Add(11 * time.Minute))
 	if _, err := fmt.Fprintln(connection, "stop"); err != nil {
 		return fmt.Errorf("request recording stop: %w", err)
 	}

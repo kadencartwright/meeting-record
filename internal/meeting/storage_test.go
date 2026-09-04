@@ -47,6 +47,7 @@ func TestMetadataRoundTripAndNewestFirst(t *testing.T) {
 		}
 		metadata := NewMetadata(id, started, devices)
 		metadata.Finish(started.Add(time.Minute), "")
+		metadata.Merged = &AudioFile{File: "meeting.m4a", Channels: 2}
 		if err := storage.Write(directory, metadata); err != nil {
 			t.Fatal(err)
 		}
@@ -68,6 +69,9 @@ func TestMetadataRoundTripAndNewestFirst(t *testing.T) {
 	}
 	if decoded.DurationSeconds != 60 || decoded.Status != "complete" {
 		t.Fatalf("unexpected metadata: %#v", decoded)
+	}
+	if decoded.Merged == nil || decoded.Merged.File != "meeting.m4a" || result.Sessions[0].MergedFile == "" {
+		t.Fatalf("merged audio was not serialized: %#v", decoded)
 	}
 }
 

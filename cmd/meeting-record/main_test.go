@@ -31,3 +31,13 @@ func TestHelp(t *testing.T) {
 		t.Fatal("help output was empty")
 	}
 }
+
+func TestParseUploadOptionsAllowsFlagsAroundSession(t *testing.T) {
+	options, err := parseUploadOptions([]string{"--parent-page", "page-id", "session-id", "--json", "--title", "Weekly sync"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.SessionID != "session-id" || options.ParentPage != "page-id" || options.Title != "Weekly sync" || !options.JSON {
+		t.Fatalf("unexpected options: %#v", options)
+	}
+}

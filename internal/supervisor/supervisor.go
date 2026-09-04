@@ -16,6 +16,7 @@ import (
 
 	"github.com/kadencartwright/meeting-record/internal/audio"
 	"github.com/kadencartwright/meeting-record/internal/meeting"
+	"github.com/kadencartwright/meeting-record/internal/processing"
 )
 
 var (
@@ -141,6 +142,18 @@ func Run(ctx context.Context, config Config) (runErr error) {
 
 	stopAndCollect(processes, results, first)
 	metadata.Finish(config.Now(), failure)
+	if failure == "" {
+		mergeContext, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		merged, mergeErr := processing.Merge(mergeContext, processing.ExecRunner{}, directory, metadata)
+		cancel()
+		if mergeErr != nil {
+			metadata.MergeFailure = mergeErr.Error()
+			fmt.Fprintf(config.Log, "meeting-record: %s\n", metadata.MergeFailure)
+		} else {
+			metadata.Merged = &merged
+			metadata.MergeFailure = ""
+		}
+	}
 	if err := config.Storage.Write(directory, metadata); err != nil {
 		runErr = err
 	}

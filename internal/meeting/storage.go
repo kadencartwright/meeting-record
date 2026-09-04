@@ -82,17 +82,19 @@ func (s Storage) Load(id string) (Metadata, string, error) {
 }
 
 type SessionSummary struct {
-	ID              string       `json:"id"`
-	StartedAt       time.Time    `json:"startedAt"`
-	EndedAt         *time.Time   `json:"endedAt,omitempty"`
-	DurationSeconds int64        `json:"durationSeconds"`
-	Status          string       `json:"status"`
-	Failure         string       `json:"failure,omitempty"`
-	Directory       string       `json:"directory"`
-	LocalFile       string       `json:"localFile"`
-	RemoteFile      string       `json:"remoteFile"`
-	Microphone      audioSummary `json:"microphone"`
-	Output          audioSummary `json:"output"`
+	ID              string        `json:"id"`
+	StartedAt       time.Time     `json:"startedAt"`
+	EndedAt         *time.Time    `json:"endedAt,omitempty"`
+	DurationSeconds int64         `json:"durationSeconds"`
+	Status          string        `json:"status"`
+	Failure         string        `json:"failure,omitempty"`
+	Directory       string        `json:"directory"`
+	LocalFile       string        `json:"localFile"`
+	RemoteFile      string        `json:"remoteFile"`
+	MergedFile      string        `json:"mergedFile,omitempty"`
+	Notion          *NotionExport `json:"notion,omitempty"`
+	Microphone      audioSummary  `json:"microphone"`
+	Output          audioSummary  `json:"output"`
 }
 
 type audioSummary struct {
@@ -123,12 +125,17 @@ func (s Storage) List() (ListResult, error) {
 			result.Warnings = append(result.Warnings, err.Error())
 			continue
 		}
+		mergedFile := ""
+		if metadata.Merged != nil && metadata.Merged.File != "" {
+			mergedFile = filepath.Join(directory, metadata.Merged.File)
+		}
 		result.Sessions = append(result.Sessions, SessionSummary{
 			ID: metadata.ID, StartedAt: metadata.StartedAt, EndedAt: metadata.EndedAt,
 			DurationSeconds: metadata.DurationSeconds, Status: metadata.Status,
 			Failure: metadata.Failure, Directory: directory,
 			LocalFile:  filepath.Join(directory, metadata.Local.File),
 			RemoteFile: filepath.Join(directory, metadata.Remote.File),
+			MergedFile: mergedFile, Notion: metadata.Notion,
 			Microphone: audioSummary{Description: metadata.Local.Description, NodeName: metadata.Local.NodeName},
 			Output:     audioSummary{Description: metadata.Remote.Description, NodeName: metadata.Remote.NodeName},
 		})

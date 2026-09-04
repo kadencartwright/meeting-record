@@ -109,7 +109,7 @@ func ParseInspect(output []byte) (map[string]string, error) {
 }
 
 func CheckDependencies() error {
-	for _, binary := range []string{"wpctl", "pw-record"} {
+	for _, binary := range []string{"wpctl", "pw-record", "ffmpeg"} {
 		if _, err := exec.LookPath(binary); err != nil {
 			return fmt.Errorf("required program %q was not found in PATH", binary)
 		}

@@ -7,7 +7,7 @@ import (
 	"github.com/kadencartwright/meeting-record/internal/audio"
 )
 
-const MetadataVersion = 1
+const MetadataVersion = 2
 
 type Track struct {
 	File        string `json:"file"`
@@ -16,17 +16,32 @@ type Track struct {
 	Channels    int    `json:"channels"`
 }
 
+type AudioFile struct {
+	File     string `json:"file"`
+	Channels int    `json:"channels"`
+}
+
+type NotionExport struct {
+	FileUploadID string    `json:"fileUploadId"`
+	BlockID      string    `json:"blockId"`
+	UploadedAt   time.Time `json:"uploadedAt"`
+	Status       string    `json:"status"`
+}
+
 type Metadata struct {
-	Version         int        `json:"version"`
-	ID              string     `json:"id"`
-	StartedAt       time.Time  `json:"startedAt"`
-	EndedAt         *time.Time `json:"endedAt,omitempty"`
-	DurationSeconds int64      `json:"durationSeconds"`
-	SampleRate      int        `json:"sampleRate"`
-	Status          string     `json:"status"`
-	Failure         string     `json:"failure,omitempty"`
-	Local           Track      `json:"local"`
-	Remote          Track      `json:"remote"`
+	Version         int           `json:"version"`
+	ID              string        `json:"id"`
+	StartedAt       time.Time     `json:"startedAt"`
+	EndedAt         *time.Time    `json:"endedAt,omitempty"`
+	DurationSeconds int64         `json:"durationSeconds"`
+	SampleRate      int           `json:"sampleRate"`
+	Status          string        `json:"status"`
+	Failure         string        `json:"failure,omitempty"`
+	Local           Track         `json:"local"`
+	Remote          Track         `json:"remote"`
+	Merged          *AudioFile    `json:"merged,omitempty"`
+	MergeFailure    string        `json:"mergeFailure,omitempty"`
+	Notion          *NotionExport `json:"notion,omitempty"`
 }
 
 func NewMetadata(id string, startedAt time.Time, devices audio.Devices) Metadata {
