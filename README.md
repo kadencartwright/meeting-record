@@ -45,9 +45,11 @@ meeting-record delete SESSION
 ```
 
 Foreground `start` owns both `pw-record` children until Ctrl-C or SIGTERM.
-`start --detach` starts the same Go supervisor in a new session and returns only
-after both recorders survive their startup grace period. The supervisor—not the
-launcher or a desktop UI—continues to own both children. It uses process groups,
+`start --detach` starts the same Go supervisor in its own transient systemd user
+service and returns only after both recorders survive their startup grace period.
+That separate cgroup is what lets it survive a Quickshell service restart. On a
+host without a usable user systemd manager, it falls back to a new Unix session.
+The supervisor—not the launcher or a desktop UI—continues to own both children. It uses process groups,
 sends SIGINT first so FLAC containers finalize, waits, and escalates only if a
 child refuses to exit. If either track exits unexpectedly, the other is stopped
 and the session is marked failed.
@@ -94,6 +96,7 @@ state.json
 control.sock
 supervisor.lock
 supervisor.log
+startup-error
 ```
 
 `state.json` is atomically replaced only at state transitions; it is not written

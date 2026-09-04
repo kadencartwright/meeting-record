@@ -42,6 +42,9 @@ func DefaultRuntime() Runtime {
 func (r Runtime) StatePath() string  { return filepath.Join(r.Directory, "state.json") }
 func (r Runtime) SocketPath() string { return filepath.Join(r.Directory, "control.sock") }
 func (r Runtime) LogPath() string    { return filepath.Join(r.Directory, "supervisor.log") }
+func (r Runtime) StartupErrorPath() string {
+	return filepath.Join(r.Directory, "startup-error")
+}
 
 func (r Runtime) Prepare() error {
 	if err := os.MkdirAll(r.Directory, 0o700); err != nil {
@@ -78,6 +81,13 @@ func (r Runtime) WriteState(state State) error {
 	}
 	data = append(data, '\n')
 	return atomicWrite(r.StatePath(), data)
+}
+
+func (r Runtime) WriteStartupError(message string) error {
+	if err := r.Prepare(); err != nil {
+		return err
+	}
+	return atomicWrite(r.StartupErrorPath(), []byte(message+"\n"))
 }
 
 func (r Runtime) ReadState() (State, error) {

@@ -30,6 +30,7 @@
               wrapProgram $out/bin/meeting-record \
                 --prefix PATH : ${pkgs.lib.makeBinPath [
                   pkgs.pipewire
+                  pkgs.systemd
                   pkgs.wireplumber
                   pkgs.xdg-utils
                 ]}
@@ -71,4 +72,3 @@
       );
     };
 }
-

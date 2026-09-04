@@ -165,10 +165,52 @@ func (app application) startDetached() error {
 	if err := app.runtime.Prepare(); err != nil {
 		return err
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolve executable: %w", err)
+	_ = os.Remove(app.runtime.StartupErrorPath())
+	executable := os.Args[0]
+	if !filepath.IsAbs(executable) {
+		if resolved, lookupErr := exec.LookPath(executable); lookupErr == nil {
+			executable = resolved
+		} else if resolved, absoluteErr := filepath.Abs(executable); absoluteErr == nil {
+			executable = resolved
+		}
 	}
+	if systemdRun, lookupErr := exec.LookPath("systemd-run"); lookupErr == nil {
+		return app.startDetachedSystemd(systemdRun, executable)
+	}
+	return app.startDetachedSession(executable)
+}
+
+func (app application) startDetachedSystemd(systemdRun, executable string) error {
+	command := exec.Command(systemdRun,
+		"--user", "--quiet", "--collect",
+		"--unit=meeting-record-supervisor",
+		"--service-type=exec",
+		executable, "_supervise",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		message := strings.TrimSpace(string(output))
+		if strings.Contains(message, "Failed to connect to bus") || strings.Contains(message, "not been booted with systemd") {
+			return app.startDetachedSession(executable)
+		}
+		return fmt.Errorf("start recording supervisor unit: %s", message)
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(app.runtime.StartupErrorPath()); err == nil {
+			return errors.New(strings.TrimSpace(string(data)))
+		}
+		state, stale, err := app.inspect()
+		if err == nil && !stale && state.Recording && state.Session != nil {
+			fmt.Fprintf(app.out, "Recording started\n\n  session     %s\n  directory   %s\n", state.Session.ID, state.Session.Directory)
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = exec.Command("systemctl", "--user", "stop", "meeting-record-supervisor.service").Run()
+	return fmt.Errorf("timed out waiting for recording supervisor startup")
+}
+
+func (app application) startDetachedSession(executable string) error {
 	logFile, err := os.OpenFile(app.runtime.LogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("open supervisor log: %w", err)
@@ -221,30 +263,35 @@ func (app application) supervise(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *readyFD < 0 {
-		return fmt.Errorf("missing readiness file descriptor")
+	var readyFile *os.File
+	if *readyFD >= 0 {
+		readyFile = os.NewFile(uintptr(*readyFD), "ready")
+		if readyFile == nil {
+			return fmt.Errorf("invalid readiness file descriptor")
+		}
+		defer readyFile.Close()
 	}
-	readyFile := os.NewFile(uintptr(*readyFD), "ready")
-	if readyFile == nil {
-		return fmt.Errorf("invalid readiness file descriptor")
-	}
-	defer readyFile.Close()
 	sent := false
 	send := func(message readyMessage) {
-		if sent {
+		if sent || readyFile == nil {
 			return
 		}
 		sent = true
 		_ = json.NewEncoder(readyFile).Encode(message)
 		_ = readyFile.Close()
 	}
+	started := false
 	err := supervisor.Run(context.Background(), supervisor.Config{
 		Storage: app.storage, Runtime: app.runtime, Log: app.errOut,
 		Started: func(state supervisor.State) {
+			started = true
 			send(readyMessage{OK: true, SessionID: state.Session.ID, Directory: state.Session.Directory})
 		},
 	})
-	if err != nil && !sent {
+	if err != nil && !started {
+		_ = app.runtime.WriteStartupError(err.Error())
+	}
+	if err != nil && !sent && readyFile != nil {
 		send(readyMessage{Error: err.Error()})
 	}
 	return err
